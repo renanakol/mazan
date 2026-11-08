@@ -65,11 +65,11 @@ function normalizeState(s) {
   // הוספת סעיפים חדשים מהספרייה לגרסאות קודמות
   const have = new Set(s.categories.map(c => c.id));
   CATEGORY_LIBRARY.forEach(([id, name, group, on, keywords]) => {
-    if (!have.has(id)) s.categories.push({ id, name, group, enabled: false, budget: 0, keywords, custom: false });
+    if (!have.has(id)) s.categories.push({ id, name, group, enabled: on, budget: 0, keywords, custom: false });
     else { const c = s.categories.find(x => x.id === id); if (!c.custom && !c.keywordsEdited) c.keywords = keywords; }
   });
   s.settings = Object.assign(defaultState().settings, s.settings || {});
-  s.rules ||= []; s.bizRules ||= []; s.goals ||= []; s.transactions ||= [];
+  s.rules ||= []; s.bizRules ||= []; s.aiTried ||= []; s.goals ||= []; s.transactions ||= [];
   if (!Array.isArray(s.members) || s.members.length < 2) s.members = defaultState().members;
   return s;
 }
@@ -125,6 +125,17 @@ function categorize(desc, type, provider, biz = false) {
     }
   }
   return best;
+}
+
+/* מסווג תנועות שעוד לא סווגו לפי מילות מפתח וחוקים. מחזיר כמה סווגו */
+function autoCategorizeAll() {
+  let n = 0;
+  for (const t of state.transactions) {
+    if (t.categoryId) continue;
+    const c = categorize(t.desc, t.type, t.provider, t.biz);
+    if (c) { t.categoryId = c; n++; }
+  }
+  return n;
 }
 
 /* ================= חישובים ================= */
@@ -362,7 +373,10 @@ function viewTx() {
   <div class="btn-row" style="margin-bottom:16px">
     <button class="btn primary" data-action="open-import">${icon('upload')}ייבוא מהבנק / אשראי</button>
     <button class="btn" data-action="add-tx">${icon('plus')}הוספת תנועה</button>
+    ${state.settings.ai !== false ? `<button class="btn" data-action="ai-run" ${Cloud.aiBusy ? 'disabled' : ''}>${Cloud.aiBusy ? 'מסווג…' : 'סיווג חכם לתנועות לא ברורות'}</button>` : ''}
   </div>
+  ${Cloud.aiStatus === 'missing_key' ? `<div class="callout">${icon('info')}<div class="grow"><strong>הסיווג החכם עוד לא מופעל.</strong> כדי שהמערכת תזהה לבד גם שמות לא מוכרים ותסביר מה כל תנועה, צריך להוסיף מפתח API של Claude בהגדרות Supabase (הסבר בהגדרות ← חוקי סיווג).</div></div>`
+    : Cloud.aiStatus === 'error' ? `<div class="callout">${icon('alert')}<div class="grow">הסיווג החכם נכשל הפעם. ננסה שוב בכניסה הבאה.</div></div>` : ''}
   <section class="card">
     <div class="filters" role="search" aria-label="סינון תנועות">
       <div class="field search"><label for="f-q" class="sr-only">חיפוש</label><input id="f-q" class="input" type="search" placeholder="חיפוש לפי שם בית עסק או הערה" value="${esc(f.q)}" data-filter="q"></div>
@@ -384,7 +398,7 @@ function txRow(t) {
   const counted = isCounted(t);
   return `<tr>
     <td class="c-date num">${dateLabel(t.date)}</td>
-    <td class="c-desc"><div class="tx-desc">${esc(t.desc)}</div>${t.note ? `<div class="tx-meta">${esc(t.note)}</div>` : ''}</td>
+    <td class="c-desc"><div class="tx-desc">${esc(t.desc)}</div>${t.note ? `<div class="tx-meta">${esc(t.note)}</div>` : ''}${t.aiNote ? `<div class="tx-ai"><span class="sr-only">הסבר משוער: </span>${esc(t.aiNote)}</div>` : ''}</td>
     <td class="c-src"><div class="small">${esc(p.name)}</div><div class="tx-meta">${esc(memberName(t.memberId))}</div></td>
     <td class="c-cat"><label class="sr-only" for="c-${t.id}">סעיף עבור ${esc(t.desc)}</label><select id="c-${t.id}" class="input sm" data-action="set-cat" data-id="${t.id}">${catOptions(t.type, t.categoryId, t.biz)}</select></td>
     <td class="amount num ${t.type === 'income' ? 'in' : ''}" ${counted ? '' : 'style="opacity:.55;text-decoration:line-through"'}>${t.type === 'income' ? '+' : ''}${fmt2(t.amount)}</td>
@@ -625,6 +639,15 @@ function settingsRules() {
       <div class="btn-row"><button class="btn primary" type="submit">הוספת חוק</button><button class="btn" type="button" data-action="recat-all">החלה מחדש על תנועות לא מסווגות</button></div>
     </form>
     ${state.rules.length ? `<ul class="rule-list">${state.rules.map(r => `<li><div class="grow"><strong>${esc(r.pattern)}</strong> <span class="muted">←</span> ${esc(cat(r.categoryId)?.name || '?')}</div><button class="icon-btn sm danger" data-action="del-rule" data-id="${r.id}" aria-label="מחיקת החוק ${esc(r.pattern)}">${icon('trash')}</button></li>`).join('')}</ul>` : '<p class="muted small">אין עדיין חוקים אישיים. הסיווג הבסיסי מזהה רשתות מוכרות (סופרים, דלק, תקשורת ועוד).</p>'}
+  </section>
+  <section class="card">
+    <div class="card-head"><h2>סיווג חכם (בינה מלאכותית)</h2>
+      <label class="toggle-row"><input type="checkbox" data-action="ai-toggle" ${state.settings.ai !== false ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--primary)"> פעיל</label></div>
+    <p class="small" style="margin-bottom:8px">כשמגיעה תנועה שהמערכת לא מכירה, היא נשלחת לסיווג חכם, שבוחר סעיף, מזהה אם זו הוצאת עסק וכותב הסבר קצר מה זה כנראה. כל שם בית עסק נשלח פעם אחת, והתשובה נשמרת כחוק לפעמים הבאות. נשלחים רק התיאור, הסוג (הכנסה או הוצאה) ורשימת הסעיפים, בלי סכומים, תאריכים או פרטי חשבון.</p>
+    ${Cloud.aiStatus === 'missing_key' ? `<div class="callout" style="margin-top:10px">${icon('info')}<div class="grow"><strong>צריך להפעיל פעם אחת:</strong>
+      <ol class="steps" style="margin-top:6px"><li>יוצרים מפתח API ב־<a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a> (נדרש אמצעי תשלום; העלות לסיווג היא אגורות בודדות לחודש).</li>
+      <li>ב־Supabase: Edge Functions ← Secrets ← מוסיפים <code dir="ltr">ANTHROPIC_API_KEY</code> עם המפתח (<a href="https://supabase.com/dashboard/project/wyhdovdxqgrykhzsjsly/functions/secrets" target="_blank" rel="noopener">קישור ישיר</a>).</li>
+      <li>חוזרים לכאן ולוחצים ״סיווג חכם״ במסך התנועות.</li></ol></div></div>` : Cloud.aiStatus === 'idle' && (state.aiTried || []).length ? `<p class="small pos">פעיל: סווגו עד עכשיו ${state.aiTried.length} שמות.</p>` : ''}
   </section>
   <section class="card">
     <div class="card-head"><h2><span class="dot" style="background:var(--c-biz)"></span> זיהוי תשלומי עסק</h2></div>
@@ -1072,6 +1095,7 @@ function confirmImport() {
   if (latest) ui.ym = latest.slice(0, 7);
   toast(`יובאו ${fresh.length} תנועות, ${auto} מהן סווגו אוטומטית.`);
   location.hash = '#/tx'; render(true);
+  Cloud.aiClassify();
 }
 
 /* ================= נתוני דוגמה ================= */
@@ -1182,6 +1206,10 @@ document.addEventListener('click', e => {
     case 'del-cat': state.categories = state.categories.filter(c => c.id !== id); state.transactions.forEach(t => { if (t.categoryId === id) t.categoryId = null; }); state.rules = state.rules.filter(r => r.categoryId !== id); save(); closeDialog(); render(); break;
     case 'group-all': state.categories.filter(c => c.group === el.dataset.group).forEach(c => c.enabled = el.dataset.on === '1'); save(); render(); $(`[data-action="group-all"][data-group="${el.dataset.group}"][data-on="${el.dataset.on}"]`)?.focus(); break;
     case 'del-rule': state.rules = state.rules.filter(r => r.id !== id); save(); render(); break;
+    case 'ai-run': {
+      Cloud.aiClassify(true).then(n => toast(Cloud.aiStatus === 'missing_key' ? 'הסיווג החכם עוד לא מופעל, צריך מפתח API' : Cloud.aiStatus === 'error' ? 'הסיווג החכם נכשל, נסו שוב' : `סווגו ${n} תנועות`));
+      render(); break;
+    }
     case 'del-bizrule': state.bizRules = (state.bizRules || []).filter(r => r.id !== id); save(); render(); break;
     case 'redetect-biz': {
       let n = 0;
@@ -1236,6 +1264,7 @@ document.addEventListener('change', e => {
     case 'cat-enable': { const c = cat(el.dataset.id); c.enabled = el.checked; save(); if (state.settings.setupDone) rerenderKeepFocus(el); break; }
     case 'cat-budget': { const c = cat(el.dataset.id); c.budget = Math.max(0, +el.value || 0); save(); rerenderKeepFocus(el); break; }
     case 'toggle-active': ui.onlyActive = el.checked; rerenderKeepFocus(el); break;
+    case 'ai-toggle': state.settings.ai = el.checked; save(); rerenderKeepFocus(el); if (el.checked) Cloud.aiClassify(); break;
     case 'set-theme': state.settings.theme = el.value; save(); rerenderKeepFocus(el); break;
     case 'set-scale': state.settings.scale = +el.value; save(); rerenderKeepFocus(el); break;
     case 'tx-type': case 'tx-biz': {

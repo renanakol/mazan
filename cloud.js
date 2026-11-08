@@ -73,8 +73,11 @@ const Cloud = {
     this.subscribe();
     this.status = 'idle';
     ui.imp = null;
+    // סיווג אוטומטי של תנועות שעוד לא סווגו (לפי מילות מפתח וחוקים), ואז סיווג חכם למה שנשאר
+    if (autoCategorizeAll() > 0) this.schedule(0);
     render();
     if (!this.snapConfig) this.schedule(0);
+    this.aiClassify();
   },
 
   async fetchAllTx(hid) {
@@ -215,6 +218,59 @@ const Cloud = {
   },
   syncRows: [],
   expected: [],
+  aiStatus: 'idle', // idle | working | missing_key | error
+  aiBusy: false,
+  /* סיווג חכם: שולח לענן תיאורים שעוד לא סווגו ולא נוסו, ומחיל את התשובות */
+  async aiClassify(force = false) {
+    if (this.aiBusy || !state || !this.household || state.settings.ai === false) return 0;
+    const tried = new Set(state.aiTried || []);
+    const key = t => `${t.type}|${t.desc}`;
+    const pending = new Map();
+    for (const t of state.transactions) {
+      if (t.categoryId && (!force || t.aiNote)) continue;
+      const c = cat(t.categoryId);
+      if (c && c.group === 'transfer') continue;
+      const k = key(t);
+      if ((!force && tried.has(k)) || pending.has(k)) continue;
+      pending.set(k, { desc: t.desc, type: t.type });
+    }
+    if (!pending.size) return 0;
+    this.aiBusy = true; this.aiStatus = 'working'; this.remoteRender();
+    const categories = state.categories.filter(c => c.enabled).map(c => ({ id: c.id, name: c.name, group: c.group, kind: groupOf(c.group).kind, biz: isBizGroup(c.group) }));
+    const all = [...pending.values()];
+    let applied = 0;
+    try {
+      for (let i = 0; i < all.length; i += 40) {
+        const items = all.slice(i, i + 40);
+        const { data, error } = await this.sb.functions.invoke('classify', { body: { items, categories } });
+        if (error) {
+          let code = '';
+          try { code = (await error.context.json()).error; } catch (_) {}
+          this.aiStatus = code === 'missing_key' || code === 'bad_key' ? 'missing_key' : 'error';
+          break;
+        }
+        for (const r of data.results || []) {
+          const it = items[r.i]; if (!it) continue;
+          for (const t of state.transactions) {
+            if (t.desc !== it.desc || t.type !== it.type) continue;
+            if (!t.aiNote && r.explanation) t.aiNote = r.explanation;
+            if (!t.categoryId) {
+              if (r.is_business && !t.biz) t.biz = true;
+              if (r.category_id && isBizGroup(cat(r.category_id)?.group) === !!t.biz) { t.categoryId = r.category_id; applied++; }
+            }
+          }
+          // לומדים: התיאור הזה יסווג מעכשיו מיד, גם בייבוא ובסנכרון
+          if (r.category_id && !state.rules.some(x => x.pattern === it.desc)) state.rules.push({ id: uid(), pattern: it.desc, categoryId: r.category_id, source: 'ai' });
+          state.aiTried.push(`${it.type}|${it.desc}`);
+        }
+        this.aiStatus = 'idle';
+      }
+    } catch (e) { console.error(e); this.aiStatus = 'error'; }
+    this.aiBusy = false;
+    save();
+    this.remoteRender();
+    return applied;
+  },
   async refreshSyncStatus(rerender = false) {
     if (!this.household) return;
     const [{ data }, { data: exp }] = await Promise.all([
@@ -241,18 +297,18 @@ const Cloud = {
 function readJSON(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (_) { return null; } }
 function isUuid(s) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s)); }
 function txToRow(t, hid) {
-  return { id: t.id, household_id: hid, date: t.date, amount: Math.round((+t.amount || 0) * 100) / 100, type: t.type, description: t.desc, category_id: t.categoryId || null, member_key: t.memberId || null, provider: t.provider || 'manual', note: t.note || '', hash: t.hash || null, is_business: !!t.biz };
+  return { id: t.id, household_id: hid, date: t.date, amount: Math.round((+t.amount || 0) * 100) / 100, type: t.type, description: t.desc, category_id: t.categoryId || null, member_key: t.memberId || null, provider: t.provider || 'manual', note: t.note || '', hash: t.hash || null, is_business: !!t.biz, ai_note: t.aiNote || null };
 }
 function rowToTx(r) {
-  return { id: r.id, date: String(r.date).slice(0, 10), amount: +r.amount, type: r.type, desc: r.description, categoryId: r.category_id || null, memberId: r.member_key || null, provider: r.provider, note: r.note || '', hash: r.hash || null, biz: !!r.is_business };
+  return { id: r.id, date: String(r.date).slice(0, 10), amount: +r.amount, type: r.type, desc: r.description, categoryId: r.category_id || null, memberId: r.member_key || null, provider: r.provider, note: r.note || '', hash: r.hash || null, biz: !!r.is_business, aiNote: r.ai_note || null };
 }
 function configFromState(s) {
   const settings = { ...s.settings }; DEVICE_SETTINGS.forEach(k => delete settings[k]);
-  return { version: s.version || 1, members: s.members, categories: s.categories, rules: s.rules, bizRules: s.bizRules || [], goals: s.goals, settings };
+  return { version: s.version || 1, members: s.members, categories: s.categories, rules: s.rules, bizRules: s.bizRules || [], aiTried: (s.aiTried || []).slice(-3000), goals: s.goals, settings };
 }
 function normalizeConfig(cfg) {
   const base = normalizeState({ ...defaultState(), ...(cfg || {}), transactions: [] });
-  return { version: base.version, members: base.members, categories: base.categories, rules: base.rules, bizRules: base.bizRules, goals: base.goals, settings: base.settings };
+  return { version: base.version, members: base.members, categories: base.categories, rules: base.rules, bizRules: base.bizRules, aiTried: base.aiTried, goals: base.goals, settings: base.settings };
 }
 function withDeviceSettings(settings) {
   const prefs = readJSON(PREFS_KEY) || {};

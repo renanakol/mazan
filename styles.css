@@ -213,6 +213,8 @@ main:focus { outline: none; }
 .tx-table .amount.in { color: var(--ok); }
 .tx-desc { font-weight: 500; overflow-wrap: anywhere; }
 .tx-meta { font-size: .8rem; color: var(--muted); }
+.tx-ai { font-size: .8rem; color: var(--muted); margin-top: 2px; }
+.tx-ai::before { content: "✦ "; color: var(--primary); }
 .tag { display: inline-block; font-size: .75rem; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
 .tag.biz { background: color-mix(in srgb, var(--c-biz) 16%, transparent); color: var(--c-biz); font-weight: 600; }
 .biz-toggle { font: inherit; font-size: .75rem; font-weight: 600; min-height: 30px; padding: 0 10px; border-radius: 999px; border: 1px dashed var(--border); background: transparent; color: var(--muted); cursor: pointer; vertical-align: middle; margin-inline-end: 4px; }
