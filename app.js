@@ -246,7 +246,7 @@ function viewMonth() {
   const hasTx = s.txs.length > 0;
 
   let callouts = '';
-  if (s.uncategorized) callouts += `<div class="callout">${icon('alert')}<div class="grow">יש ${s.uncategorized} תנועות שעוד לא סווגו לסעיף, ולכן הן לא מופיעות בתקציב.</div><a class="btn sm" href="#/tx" data-action="filter-none">לסיווג</a></div>`;
+  if (s.uncategorized) callouts += `<div class="callout">${icon('alert')}<div class="grow">יש ${s.uncategorized} תנועות שעוד לא סווגו לסעיף, ולכן הן לא מופיעות בתקציב.</div><button class="btn sm primary" data-action="open-qc">לסיווג מהיר</button></div>`;
   if (!hasTx) callouts += `<div class="callout info">${icon('info')}<div class="grow">אין עדיין תנועות ב${ymLabel(ui.ym)}. אפשר לייבא קובץ מהבנק או מחברת האשראי, או להוסיף תנועה ידנית.</div><div class="btn-row"><button class="btn sm primary" data-action="open-import">ייבוא קובץ</button><button class="btn sm" data-action="add-tx">הוספה ידנית</button></div></div>`;
 
   return `
@@ -373,10 +373,9 @@ function viewTx() {
   <div class="btn-row" style="margin-bottom:16px">
     <button class="btn primary" data-action="open-import">${icon('upload')}ייבוא מהבנק / אשראי</button>
     <button class="btn" data-action="add-tx">${icon('plus')}הוספת תנועה</button>
-    ${state.settings.ai !== false ? `<button class="btn" data-action="ai-run" ${Cloud.aiBusy ? 'disabled' : ''}>${Cloud.aiBusy ? 'מסווג…' : 'סיווג חכם לתנועות לא ברורות'}</button>` : ''}
+    ${(() => { const n = unknownPlaces().length; return n ? `<button class="btn" data-action="open-qc">סיווג מהיר · ${n} ${n === 1 ? 'מקום לא מוכר' : 'מקומות לא מוכרים'}</button>` : ''; })()}
+    ${state.settings.ai !== false && Cloud.aiStatus !== 'missing_key' ? `<button class="btn" data-action="ai-run" ${Cloud.aiBusy ? 'disabled' : ''}>${Cloud.aiBusy ? 'מסווג…' : 'סיווג חכם (AI)'}</button>` : ''}
   </div>
-  ${Cloud.aiStatus === 'missing_key' ? `<div class="callout">${icon('info')}<div class="grow"><strong>הסיווג החכם עוד לא מופעל.</strong> כדי שהמערכת תזהה לבד גם שמות לא מוכרים ותסביר מה כל תנועה, צריך להוסיף מפתח API של Claude בהגדרות Supabase (הסבר בהגדרות ← חוקי סיווג).</div></div>`
-    : Cloud.aiStatus === 'error' ? `<div class="callout">${icon('alert')}<div class="grow">הסיווג החכם נכשל הפעם. ננסה שוב בכניסה הבאה.</div></div>` : ''}
   <section class="card">
     <div class="filters" role="search" aria-label="סינון תנועות">
       <div class="field search"><label for="f-q" class="sr-only">חיפוש</label><input id="f-q" class="input" type="search" placeholder="חיפוש לפי שם בית עסק או הערה" value="${esc(f.q)}" data-filter="q"></div>
@@ -644,7 +643,7 @@ function settingsRules() {
     <div class="card-head"><h2>סיווג חכם (בינה מלאכותית)</h2>
       <label class="toggle-row"><input type="checkbox" data-action="ai-toggle" ${state.settings.ai !== false ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--primary)"> פעיל</label></div>
     <p class="small" style="margin-bottom:8px">כשמגיעה תנועה שהמערכת לא מכירה, היא נשלחת לסיווג חכם, שבוחר סעיף, מזהה אם זו הוצאת עסק וכותב הסבר קצר מה זה כנראה. כל שם בית עסק נשלח פעם אחת, והתשובה נשמרת כחוק לפעמים הבאות. נשלחים רק התיאור, הסוג (הכנסה או הוצאה) ורשימת הסעיפים, בלי סכומים, תאריכים או פרטי חשבון.</p>
-    ${Cloud.aiStatus === 'missing_key' ? `<div class="callout" style="margin-top:10px">${icon('info')}<div class="grow"><strong>צריך להפעיל פעם אחת:</strong>
+    ${Cloud.aiStatus === 'missing_key' ? `<div class="callout" style="margin-top:10px">${icon('info')}<div class="grow"><strong>לא חובה. בינתיים אפשר לסווג מקומות לא מוכרים ב״סיווג מהיר״ במסך התנועות. להפעלה בעתיד:</strong>
       <ol class="steps" style="margin-top:6px"><li>יוצרים מפתח API ב־<a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a> (נדרש אמצעי תשלום; העלות לסיווג היא אגורות בודדות לחודש).</li>
       <li>ב־Supabase: Edge Functions ← Secrets ← מוסיפים <code dir="ltr">ANTHROPIC_API_KEY</code> עם המפתח (<a href="https://supabase.com/dashboard/project/wyhdovdxqgrykhzsjsly/functions/secrets" target="_blank" rel="noopener">קישור ישיר</a>).</li>
       <li>חוזרים לכאן ולוחצים ״סיווג חכם״ במסך התנועות.</li></ol></div></div>` : Cloud.aiStatus === 'idle' && (state.aiTried || []).length ? `<p class="small pos">פעיל: סווגו עד עכשיו ${state.aiTried.length} שמות.</p>` : ''}
@@ -797,7 +796,12 @@ function openDialog(title, body, foot, wide = false) {
   const first = d.querySelector('.dlg-body input:not([type=hidden]), .dlg-body select, .dlg-body textarea, .dlg-body button');
   if (first) first.focus();
 }
-function closeDialog() { if (dlg().open) dlg().close(); ui.imp = null; }
+function closeDialog() { if (dlg().open) dlg().close(); afterDialogClosed(); }
+function afterDialogClosed() {
+  ui.imp = null;
+  const wasQc = ui.qc; ui.qc = false;
+  if (Cloud.pendingRender || wasQc) { Cloud.pendingRender = false; render(); }
+}
 
 function txDialog(t) {
   const isNew = !t;
@@ -847,6 +851,42 @@ function catDialog(c) {
     </form>`,
     `<button class="btn primary" type="submit" form="cat-form">שמירה</button>${!isNew && c.custom ? `<button class="btn danger" data-action="del-cat" data-id="${c.id}">מחיקת הסעיף</button>` : ''}<button class="btn" data-action="close-dlg">ביטול</button>`);
 }
+/* סיווג מהיר: כל המקומות שלא סווגו, מקובצים לפי תיאור. בחירה אחת חלה על כל התנועות ונשמרת כחוק */
+function unknownPlaces() {
+  const map = new Map();
+  for (const t of state.transactions) {
+    if (t.categoryId) continue;
+    const k = `${t.type}|${t.biz ? 1 : 0}|${t.desc}`;
+    const g = map.get(k) || { key: k, desc: t.desc, type: t.type, biz: !!t.biz, count: 0, total: 0, last: '', aiNote: t.aiNote };
+    g.count++; g.total += t.amount; if (t.date > g.last) g.last = t.date; if (!g.aiNote && t.aiNote) g.aiNote = t.aiNote;
+    map.set(k, g);
+  }
+  return [...map.values()].sort((a, b) => b.total - a.total);
+}
+function quickClassifyDialog() {
+  const list = unknownPlaces();
+  ui.qc = true;
+  openDialog('סיווג מהיר', list.length ? `
+    <p class="small muted" style="margin-bottom:10px">אלה המקומות שהמערכת עוד לא מכירה, מהסכום הגדול לקטן. בוחרים סעיף פעם אחת, והוא חל על כל התנועות מאותו מקום, וגם על תנועות עתידיות.</p>
+    <ul class="rule-list">${list.map((g, i) => `<li style="flex-wrap:wrap">
+      <div class="grow" style="min-width:180px"><div class="tx-desc">${esc(g.desc)}</div>
+        <div class="tx-meta">${g.type === 'income' ? 'הכנסה' : 'הוצאה'}${g.biz ? ' · עסק' : ''} · ${g.count} ${g.count === 1 ? 'תנועה' : 'תנועות'} · <span class="num">${fmt(g.total)}</span> · אחרונה ${dateLabel(g.last)}</div>
+        ${g.aiNote ? `<div class="tx-ai">${esc(g.aiNote)}</div>` : ''}</div>
+      <label class="sr-only" for="qc-${i}">סעיף עבור ${esc(g.desc)}</label>
+      <select id="qc-${i}" class="input sm" style="max-width:240px" data-action="qc-set" data-key="${esc(g.key)}">${catOptions(g.type, '', g.biz)}</select>
+    </li>`).join('')}</ul>` : `<div class="empty">${icon('tx')}<p>כל התנועות מסווגות.</p></div>`,
+    `<button class="btn primary" data-action="close-dlg">סיום</button>`, true);
+}
+function applyQuick(key, categoryId) {
+  const [type, bizFlag, ...rest] = key.split('|'); const desc = rest.join('|'); const biz = bizFlag === '1';
+  let n = 0;
+  for (const t of state.transactions) if (!t.categoryId && t.desc === desc && t.type === type && !!t.biz === biz) { t.categoryId = categoryId; n++; }
+  state.rules = state.rules.filter(r => r.pattern !== desc);
+  state.rules.push({ id: uid(), pattern: desc, categoryId });
+  save();
+  return n;
+}
+
 function confirmDialog(title, text, action, label = 'מחיקה') {
   openDialog(title, `<p>${text}</p>`, `<button class="btn primary" data-action="${action}" style="background:var(--danger);border-color:var(--danger)">${label}</button><button class="btn" data-action="close-dlg">ביטול</button>`);
 }
@@ -1206,6 +1246,7 @@ document.addEventListener('click', e => {
     case 'del-cat': state.categories = state.categories.filter(c => c.id !== id); state.transactions.forEach(t => { if (t.categoryId === id) t.categoryId = null; }); state.rules = state.rules.filter(r => r.categoryId !== id); save(); closeDialog(); render(); break;
     case 'group-all': state.categories.filter(c => c.group === el.dataset.group).forEach(c => c.enabled = el.dataset.on === '1'); save(); render(); $(`[data-action="group-all"][data-group="${el.dataset.group}"][data-on="${el.dataset.on}"]`)?.focus(); break;
     case 'del-rule': state.rules = state.rules.filter(r => r.id !== id); save(); render(); break;
+    case 'open-qc': quickClassifyDialog(); break;
     case 'ai-run': {
       Cloud.aiClassify(true).then(n => toast(Cloud.aiStatus === 'missing_key' ? 'הסיווג החכם עוד לא מופעל, צריך מפתח API' : Cloud.aiStatus === 'error' ? 'הסיווג החכם נכשל, נסו שוב' : `סווגו ${n} תנועות`));
       render(); break;
@@ -1248,6 +1289,15 @@ document.addEventListener('change', e => {
   if (el.dataset.map) { ui.imp.map[el.dataset.map] = el.dataset.map === 'mode' ? el.value : +el.value; ui.imp.mapOpen = true; renderImport(); $(`[data-map="${el.dataset.map}"]`)?.focus(); return; }
   const a = el.dataset.action; if (!a) return;
   switch (a) {
+    case 'qc-set': {
+      if (!el.value) break;
+      const n = applyQuick(el.dataset.key, el.value);
+      const idx = $$('[data-action="qc-set"]').indexOf(el);
+      toast(`${n} ${n === 1 ? 'תנועה סווגה' : 'תנועות סווגו'} ל״${cat(el.value).name}״, ונשמר לפעמים הבאות`);
+      quickClassifyDialog();
+      const sels = $$('[data-action="qc-set"]'); (sels[Math.min(idx, sels.length - 1)] || $('.dlg-foot .btn'))?.focus();
+      break;
+    }
     case 'auth-mode': ui.authMode = el.value; render(); $(`[data-action="auth-mode"][value="${el.value}"]`)?.focus(); break;
     case 'set-cat': {
       const t = state.transactions.find(x => x.id === el.dataset.id); t.categoryId = el.value || null; save();
@@ -1358,7 +1408,7 @@ document.addEventListener('submit', e => {
   }
 });
 
-dlg().addEventListener('close', () => { ui.imp = null; if (Cloud.pendingRender) { Cloud.pendingRender = false; render(); } });
+dlg().addEventListener('close', afterDialogClosed); // גם סגירה במקש Esc
 
 /* ================= הפעלה ================= */
 readRoute();
