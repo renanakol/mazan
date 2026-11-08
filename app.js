@@ -885,10 +885,16 @@ async function readImportFile(file) {
       // לוקחים את הגיליון עם הכי הרבה שורות
       rows = wb.SheetNames.map(n => XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' })).sort((a, b) => b.length - a.length)[0] || [];
     }
+    // שתי גישות: לפי שורת כותרות, או זיהוי עמודות לפי התוכן (לקבצים בלי כותרות, כמו לאומי). בוחרים את מה שמוצא יותר תנועות.
+    const candidates = [];
     const hi = detectHeader(rows);
-    if (hi < 0) { toast('לא זיהיתי שורת כותרות בקובץ. נסו קובץ אחר.'); return; }
-    const headers = rows[hi].map(x => String(x).trim());
-    Object.assign(ui.imp, { rows: rows.slice(hi + 1), headers, fileName: file.name, map: autoMap(headers, providerById(ui.imp.provider).kind) });
+    if (hi >= 0) { const headers = rows[hi].map(x => String(x).trim()); candidates.push({ rows: rows.slice(hi + 1), headers, map: autoMap(headers, providerById(ui.imp.provider).kind) }); }
+    const inf = inferColumns(rows);
+    if (inf) candidates.push(inf);
+    let best = null, bestN = -1;
+    for (const c of candidates) { Object.assign(ui.imp, c); const n = buildImported().length; if (n > bestN) { best = c; bestN = n; } }
+    if (!best || bestN <= 0) { ui.imp.rows = null; toast('לא הצלחתי לזהות תנועות בקובץ. נסו לייצא שוב מהאתר, או קובץ אחר.'); renderImport(); return; }
+    Object.assign(ui.imp, best, { fileName: file.name });
     renderImport();
   } catch (e) {
     console.error(e); toast('לא הצלחתי לקרוא את הקובץ.');
@@ -901,6 +907,47 @@ function detectHeader(rows) {
     if (score >= 2) return i;
   }
   return -1;
+}
+/* זיהוי עמודות לפי התוכן, לקבצים בלי שורת כותרות */
+function inferColumns(rows) {
+  const isDate = v => (v instanceof Date) || /^\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}$/.test(String(v).trim()) || /^\d{4}-\d{2}-\d{2}/.test(String(v).trim());
+  const data = rows.filter(r => (r || []).some(isDate));
+  if (data.length < 1) return null;
+  const width = Math.max(...data.map(r => r.length));
+  const stats = Array.from({ length: width }, () => ({ date: 0, num: 0, dec: 0, text: 0, other: 0, filled: 0, neg: 0 }));
+  for (const r of data) for (let i = 0; i < width; i++) {
+    const v = r[i]; const s = String(v ?? '').trim(); if (!s) continue;
+    const st = stats[i]; st.filled++;
+    if (isDate(v)) st.date++;
+    else if (typeof v === 'number' || /^-?[\d,]+(\.\d+)?-?$/.test(s.replace(/[₪\s]/g, ''))) { st.num++; if (/\.\d/.test(s) || (typeof v === 'number' && v % 1)) st.dec++; if (s.startsWith('-') || s.endsWith('-') || v < 0) st.neg++; }
+    else if (/[a-zא-ת]/i.test(s)) st.text++; // תיאור: יש בו אותיות
+    else st.other++;                         // למשל מספר חשבון 12345/67
+  }
+  const n = data.length;
+  const dateCol = stats.reduce((b, s, i) => (s.date > (stats[b]?.date ?? -1) ? i : b), 0);
+  const textCols = stats.map((s, i) => [i, s.text]).filter(([i, t]) => i !== dateCol && t > 0).sort((a, b) => b[1] - a[1]);
+  if (!textCols.length) return null;
+  const descCol = textCols[0][0];
+  const numCols = stats.map((s, i) => ({ i, ...s })).filter(s => s.i !== dateCol && s.i !== descCol && s.num > 0 && s.text === 0 && s.other === 0);
+  // יתרה: העמודה המספרית האחרונה שמלאה כמעט תמיד ויש בה עשרוניים; אסמכתא: מספרים שלמים שמלאים תמיד
+  const full = numCols.filter(s => s.filled >= n * .9);
+  const sparse = numCols.filter(s => s.filled < n * .9);
+  const map = { date: dateCol, desc: descCol, desc2: -1, amount: -1, debit: -1, credit: -1, mode: 'negative_expense' };
+  const exclusive = (a, b) => data.every(r => !(String(r[a] ?? '').trim() && String(r[b] ?? '').trim()));
+  if (sparse.length >= 2 && exclusive(sparse[0].i, sparse[1].i)) { map.mode = 'two'; map.debit = sparse[0].i; map.credit = sparse[1].i; map.amount = sparse[0].i; }
+  else {
+    const amt = full.filter(s => s.neg > 0 && s.dec > 0)[0] || sparse[0] || full.filter(s => s.dec > 0)[0];
+    if (!amt) return null;
+    map.amount = map.debit = map.credit = amt.i;
+  }
+  const label = i => {
+    if (i === map.date) return 'תאריך'; if (i === map.desc) return 'תיאור';
+    if (map.mode === 'two' && i === map.debit) return 'חובה'; if (map.mode === 'two' && i === map.credit) return 'זכות';
+    if (map.mode !== 'two' && i === map.amount) return 'סכום';
+    const sample = data.map(r => String(r[i] ?? '').trim()).find(Boolean);
+    return `עמודה ${i + 1}${sample ? ` (למשל: ${sample.slice(0, 18)})` : ''}`;
+  };
+  return { rows, headers: Array.from({ length: width }, (_, i) => label(i)), map };
 }
 function autoMap(h, kind) {
   const find = (...rxs) => { for (const rx of rxs) { const i = h.findIndex(x => rx.test(x)); if (i >= 0) return i; } return -1; };
