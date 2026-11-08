@@ -1,0 +1,15 @@
+{
+  "name": "mazan-sync",
+  "private": true,
+  "description": "סנכרון יומי לקריאה בלבד של תנועות מהבנק ומחברות האשראי לאפליקציית מאזן",
+  "main": "sync.js",
+  "scripts": {
+    "sync": "node sync.js",
+    "test": "node test-convert.js"
+  },
+  "engines": { "node": ">=22.22.2" },
+  "dependencies": {
+    "@supabase/supabase-js": "2.45.4",
+    "israeli-bank-scrapers": "6.12.2"
+  }
+}

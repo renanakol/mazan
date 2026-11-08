@@ -62,6 +62,7 @@ const Cloud = {
     if (e1) throw e1; if (e2) throw e2;
     this.household = { id: hh.id, name: hh.name };
     this.memberRows = members || [];
+    this.refreshSyncStatus();
     const rows = await this.fetchAllTx(hh.id);
     state = buildStateFromCloud(hh.config, rows);
     this.snapConfig = JSON.stringify(configFromState(state));
@@ -211,6 +212,13 @@ const Cloud = {
     const { error } = await this.sb.rpc('join_household', { p_code: code });
     if (error) throw error;
     await this.loadHousehold();
+  },
+  syncRows: [],
+  async refreshSyncStatus(rerender = false) {
+    if (!this.household) return;
+    const { data } = await this.sb.from('sync_status').select('*').eq('household_id', this.household.id);
+    this.syncRows = data || [];
+    if (rerender && ui.route === 'settings' && ui.settingsTab === 'connections') render();
   },
   async createInvite() {
     const { data, error } = await this.sb.rpc('create_invite', { p_household: this.household.id });

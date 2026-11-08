@@ -520,11 +520,16 @@ function settingsConnections() {
   return `
   <section class="card">
     <div class="card-head"><h2>חשבונות בנק וכרטיסי אשראי</h2></div>
-    <div class="callout info">${icon('link')}<div class="grow"><strong>חיבור לקריאה בלבד.</strong> בשלב הזה הנתונים נכנסים מקובץ אקסל שמורידים מאתר הבנק או חברת האשראי (בדרך כלל: פירוט עסקאות ← ייצוא לאקסל). שום פרט כניסה לא נשמר כאן.
-    השלב הבא: סנכרון אוטומטי שמושך את התנועות בעצמו, לקריאה בלבד, ונגיש לשניכם מהטלפון ומהמחשב.</div></div>
+    <div class="callout info">${icon('link')}<div class="grow"><strong>סנכרון אוטומטי לקריאה בלבד.</strong> תוכנת הסנכרון במחשב הביתי מושכת כל יום את התנועות מהבנק ומחברות האשראי, ופרטי הכניסה נשמרים מוצפנים רק שם. אפשר תמיד לייבא גם קובץ אקסל ידנית.</div></div>
     <ul class="provider-list">${provs.map(p => `<li class="provider">
       <div class="p-head"><h3>${esc(p.name)}</h3><span class="pill">${p.kind === 'bank' ? 'בנק' : 'אשראי'}</span></div>
-      ${state.members.map(m => { const li = lastImport(p.id, m.id); return `<p class="small">${esc(m.name)}: ${li ? `<span class="pill ok">${li.count} תנועות · עד ${dateLabel(li.last)}</span>` : '<span class="muted">טרם יובא</span>'}</p>`; }).join('')}
+      ${state.members.map(m => {
+        const li = lastImport(p.id, m.id);
+        const ss = (Cloud.syncRows || []).find(r => r.provider === p.id && r.member_key === m.id);
+        const when = ss ? new Date(ss.last_run).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+        return `<div class="small"><strong>${esc(m.name)}:</strong> ${li ? `${li.count} תנועות, עד ${dateLabel(li.last)}` : '<span class="muted">אין תנועות</span>'}
+          ${ss ? `<div><span class="pill ${ss.ok ? 'ok' : ''}" ${ss.ok ? '' : 'style="background:var(--danger-soft);color:var(--danger)"'}>${ss.ok ? 'סונכרן' : 'הסנכרון נכשל'} · ${esc(when)}</span>${ss.ok ? '' : `<div class="neg" style="margin-top:4px">${esc(ss.message)}</div>`}</div>` : ''}</div>`;
+      }).join('')}
       <div class="btn-row" style="margin-top:4px"><button class="btn sm" data-action="open-import" data-provider="${p.id}">${icon('upload')}ייבוא קובץ</button></div>
     </li>`).join('')}</ul>
   </section>
@@ -996,7 +1001,7 @@ document.addEventListener('click', e => {
     case 'month-shift': ui.ym = shiftYm(ui.ym, +el.dataset.d); render(); $(`[data-action="month-shift"][data-d="${el.dataset.d}"]`)?.focus(); break;
     case 'year-shift': ui.year += +el.dataset.d; render(); $(`[data-action="year-shift"][data-d="${el.dataset.d}"]`)?.focus(); break;
     case 'filter-none': ui.filters = { q: '', cat: '__none', member: '', type: '' }; break;
-    case 'settings-tab': e.preventDefault(); ui.settingsTab = el.dataset.tab; if (ui.route !== 'settings') location.hash = '#/settings'; else { render(); $(`[data-tab="${el.dataset.tab}"]`)?.focus(); } break;
+    case 'settings-tab': e.preventDefault(); ui.settingsTab = el.dataset.tab; if (el.dataset.tab === 'connections') Cloud.refreshSyncStatus(true); if (ui.route !== 'settings') location.hash = '#/settings'; else { render(); $(`[data-tab="${el.dataset.tab}"]`)?.focus(); } break;
     case 'add-tx': txDialog(); break;
     case 'edit-tx': txDialog(state.transactions.find(t => t.id === id)); break;
     case 'del-tx': { const t = state.transactions.find(x => x.id === id); ui.pendingDel = id; confirmDialog('מחיקת תנועה', `למחוק את התנועה ״${esc(t.desc)}״ על סך ${fmt2(t.amount)}?`, 'do-del-tx'); break; }
