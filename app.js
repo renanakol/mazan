@@ -878,6 +878,19 @@ function renderImport() {
     dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag'); if (e.dataTransfer.files[0]) readImportFile(e.dataTransfer.files[0]); });
   }
 }
+function decodeText(buf) {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (_) { return new TextDecoder('windows-1255').decode(buf); }
+}
+function parseHtmlTables(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const rows = [];
+  for (const tr of doc.querySelectorAll('tr')) {
+    const cells = [...tr.children].filter(c => /^(TD|TH)$/.test(c.tagName))
+      .map(c => (c.textContent || '').replace(/[‎‏ ]/g, ' ').replace(/\s+/g, ' ').trim());
+    if (cells.some(Boolean)) rows.push(cells);
+  }
+  return rows;
+}
 function parseCSV(text) {
   const rows = []; let row = [], cur = '', q = false;
   const head = text.split('\n').slice(0, 15).join('\n');
@@ -898,7 +911,11 @@ async function readImportFile(file) {
   try {
     let rows;
     const buf = await file.arrayBuffer();
-    if (/\.(csv|txt)$/i.test(file.name)) {
+    const head = new TextDecoder('latin1').decode(buf.slice(0, 512)).replace(/^﻿|^\xEF\xBB\xBF/, '').trimStart().toLowerCase();
+    if (head.startsWith('<')) {
+      // קובץ "אקסל" שהוא בעצם דף אינטרנט (כך מייצאים לאומי, הפועלים ועוד): קוראים את הטבלאות ישירות
+      rows = parseHtmlTables(decodeText(buf));
+    } else if (/\.(csv|txt)$/i.test(file.name)) {
       // בנקים בישראל מייצאים לפעמים ב-UTF-8 ולפעמים ב-Windows-1255
       let text;
       try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (_) { text = new TextDecoder('windows-1255').decode(buf); }
@@ -922,7 +939,7 @@ async function readImportFile(file) {
     Object.assign(ui.imp, best, { fileName: file.name });
     renderImport();
   } catch (e) {
-    console.error(e); toast('לא הצלחתי לקרוא את הקובץ.');
+    console.error(e); toast(`לא הצלחתי לקרוא את הקובץ (${String(e && e.message || e).slice(0, 80)})`);
   }
 }
 const HDR_RX = /תאריך|תיאור|סכום|בית ה?עסק|פרטים|חובה|זכות|אסמכתא|יתרה|הפעולה|פעולה|חיוב|date|amount|description/i;
