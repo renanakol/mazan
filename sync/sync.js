@@ -59,7 +59,7 @@ async function main() {
     const key = `${acc.provider}:${acc.member}`;
     if (ONLY && ONLY !== key) continue;
     const p = PROVIDERS[acc.provider];
-    const who = (members.find(m => m.id === acc.member) || {}).name || acc.member;
+    const who = acc.member === 'joint' ? 'משותף' : (members.find(m => m.id === acc.member) || {}).name || acc.member;
     const label = `${p.name} (${who})`;
     const start = new Date();
     if (MONTHS) start.setMonth(start.getMonth() - MONTHS);
@@ -78,7 +78,7 @@ async function main() {
       const incoming = convertScrape(result, acc.provider, acc.member);
       const fromDate = incoming.reduce((m, t) => (t.date < m ? t.date : m), start.toISOString().slice(0, 10));
       const existing = await fetchExisting(ctx.sb, ctx.householdId, acc.provider, acc.member, fromDate);
-      const fresh = prepareNew(incoming, existing, ctx.config, members);
+      const fresh = prepareNew(incoming, existing, ctx.config, members, !!acc.business);
       for (let i = 0; i < fresh.length; i += 500) {
         const { error } = await ctx.sb.from('transactions').insert(fresh.slice(i, i + 500).map(t => toRow(t, ctx.householdId)));
         if (error) throw error;

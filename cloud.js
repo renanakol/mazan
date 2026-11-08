@@ -236,18 +236,18 @@ const Cloud = {
 function readJSON(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (_) { return null; } }
 function isUuid(s) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s)); }
 function txToRow(t, hid) {
-  return { id: t.id, household_id: hid, date: t.date, amount: Math.round((+t.amount || 0) * 100) / 100, type: t.type, description: t.desc, category_id: t.categoryId || null, member_key: t.memberId || null, provider: t.provider || 'manual', note: t.note || '', hash: t.hash || null };
+  return { id: t.id, household_id: hid, date: t.date, amount: Math.round((+t.amount || 0) * 100) / 100, type: t.type, description: t.desc, category_id: t.categoryId || null, member_key: t.memberId || null, provider: t.provider || 'manual', note: t.note || '', hash: t.hash || null, is_business: !!t.biz };
 }
 function rowToTx(r) {
-  return { id: r.id, date: String(r.date).slice(0, 10), amount: +r.amount, type: r.type, desc: r.description, categoryId: r.category_id || null, memberId: r.member_key || null, provider: r.provider, note: r.note || '', hash: r.hash || null };
+  return { id: r.id, date: String(r.date).slice(0, 10), amount: +r.amount, type: r.type, desc: r.description, categoryId: r.category_id || null, memberId: r.member_key || null, provider: r.provider, note: r.note || '', hash: r.hash || null, biz: !!r.is_business };
 }
 function configFromState(s) {
   const settings = { ...s.settings }; DEVICE_SETTINGS.forEach(k => delete settings[k]);
-  return { version: s.version || 1, members: s.members, categories: s.categories, rules: s.rules, goals: s.goals, settings };
+  return { version: s.version || 1, members: s.members, categories: s.categories, rules: s.rules, bizRules: s.bizRules || [], goals: s.goals, settings };
 }
 function normalizeConfig(cfg) {
   const base = normalizeState({ ...defaultState(), ...(cfg || {}), transactions: [] });
-  return { version: base.version, members: base.members, categories: base.categories, rules: base.rules, goals: base.goals, settings: base.settings };
+  return { version: base.version, members: base.members, categories: base.categories, rules: base.rules, bizRules: base.bizRules, goals: base.goals, settings: base.settings };
 }
 function withDeviceSettings(settings) {
   const prefs = readJSON(PREFS_KEY) || {};

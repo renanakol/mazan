@@ -8,7 +8,9 @@ const GROUPS = [
   { id: 'variable', name: 'הוצאות שוטפות',    kind: 'expense', color: 'var(--c-variable)', hint: 'משתנות מחודש לחודש' },
   { id: 'periodic', name: 'הוצאות תקופתיות',  kind: 'expense', color: 'var(--c-periodic)', hint: 'לא בכל חודש. כדאי לתקצב ממוצע חודשי' },
   { id: 'debt',     name: 'חובות וחיסכון',    kind: 'expense', color: 'var(--c-debt)',     hint: 'החזרי הלוואות והפקדות לחיסכון' },
-  { id: 'transfer', name: 'לא נספר',          kind: 'neutral', color: 'var(--muted)',      hint: 'חיוב כרטיס אשראי בעו״ש והעברות פנימיות, כדי שלא ייספרו פעמיים' }
+  { id: 'biz_income',  name: 'הכנסות העסק', kind: 'income',  biz: true, color: 'var(--c-biz)', hint: 'נפרד מתקציב הבית' },
+  { id: 'biz_expense', name: 'הוצאות העסק', kind: 'expense', biz: true, color: 'var(--c-biz)', hint: 'נפרד מתקציב הבית' },
+  { id: 'transfer', name: 'לא נספר',         kind: 'neutral', color: 'var(--muted)',      hint: 'חיוב כרטיס אשראי בעו״ש והעברות פנימיות, כדי שלא ייספרו פעמיים' }
 ];
 
 const CATEGORY_LIBRARY = [
@@ -82,6 +84,20 @@ const CATEGORY_LIBRARY = [
   ['debts', 'החזרי הלוואות וחובות', 'debt', false, ['הלוואה', 'החזר הלוואה', 'פרעון הלוואה', 'פירעון הלוואה']],
   ['savings', 'הפקדה לחיסכון', 'debt', true, ['חיסכון', 'פיקדון', 'פקדון', 'קופת גמל', 'גמל להשקעה', 'קרן השתלמות']],
   ['future', 'קרן חירום / הוצאות עתידיות', 'debt', false, []],
+
+  // עסק
+  ['biz_sales', 'הכנסות ממכירות ושירותים', 'biz_income', true, []],
+  ['biz_other_income', 'הכנסות אחרות של העסק', 'biz_income', true, []],
+  ['biz_equipment', 'ציוד ומחשבים', 'biz_expense', true, ['ksp', 'באג', 'איביי', 'amazon', 'ivory', 'אייבורי']],
+  ['biz_software', 'תוכנות ומנויים לעסק', 'biz_expense', true, ['google', 'microsoft', 'adobe', 'canva', 'zoom', 'wix', 'chatgpt', 'openai', 'claude', 'anthropic', 'notion', 'dropbox']],
+  ['biz_marketing', 'שיווק ופרסום', 'biz_expense', true, ['facebk', 'facebook', 'meta', 'google ads', 'instagram', 'דפוס']],
+  ['biz_car', 'רכב ונסיעות לעסק', 'biz_expense', true, ['פז ', 'סונול', 'דור אלון', 'דלק ', 'חניון', 'פנגו', 'כביש 6', 'gett', 'יאנגו']],
+  ['biz_phone', 'תקשורת וטלפון לעסק', 'biz_expense', true, ['פרטנר', 'סלקום', 'פלאפון', 'בזק']],
+  ['biz_pro', 'רואה חשבון, ייעוץ ושירותים מקצועיים', 'biz_expense', true, ['רואה חשבון', 'רו"ח', 'עו"ד', 'הנהלת חשבונות', 'חשבונית ירוקה', 'icount', 'greeninvoice']],
+  ['biz_office', 'משרד ושכירות', 'biz_expense', true, ['משרד', 'wework', 'מתחם עבודה']],
+  ['biz_tax', 'מיסים וביטוח לאומי לעסק', 'biz_expense', true, ['מס הכנסה', 'מע"מ', 'מעמ', 'ביטוח לאומי']],
+  ['biz_fees', 'עמלות סליקה ובנק לעסק', 'biz_expense', true, ['עמלה', 'עמלת', 'סליקה', 'paypal', 'bit עסקי']],
+  ['biz_misc', 'הוצאות עסק אחרות', 'biz_expense', true, []],
 
   // לא נספר
   ['card_charge', 'חיוב כרטיס אשראי (בעו״ש)', 'transfer', true, ['ישראכרט', 'אמריקן אקספרס', 'אמקס', 'כאל', 'ויזה כאל', 'cal ', 'מקס איט', 'max it', 'לאומי קארד', 'דיינרס', 'כרטיסי אשראי', 'כרטיס אשראי']],

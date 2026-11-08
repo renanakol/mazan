@@ -53,4 +53,23 @@ const fb = prepareNew(bank, [], cfg, cfg.members);
 assert.deepStrictEqual(fb.map(t => t.categoryId), ['card_charge', 'salary1']);
 assert.strictEqual(fb[1].desc, 'משכורת - חברת אופק');
 
+// עסק: זיהוי לפי מילת מפתח, כלל שנלמד, וחשבון עסקי
+const cfgB = { ...cfg, categories: [...cfg.categories,
+  { id: 'biz_software', group: 'biz_expense', enabled: true, keywords: ['adobe', 'canva'] },
+  { id: 'biz_misc', group: 'biz_expense', enabled: true, keywords: [] },
+  { id: 'subscriptions', group: 'fixed', enabled: true, keywords: ['spotify', 'canva'] }],
+  bizRules: [{ pattern: 'חומרי גלם בע"מ', biz: true }, { pattern: 'canva', biz: false }],
+  settings: { bizKeywords: ['adobe', 'canva'] } };
+const bt = convertScrape({ accounts: [{ txns: [
+  { type: 'normal', date: '2026-10-05T21:00:00.000Z', chargedAmount: -89, description: 'ADOBE *CREATIVE CLOUD', status: 'completed' },
+  { type: 'normal', date: '2026-10-06T21:00:00.000Z', chargedAmount: -400, description: 'חומרי גלם בע"מ', status: 'completed' },
+  { type: 'normal', date: '2026-10-07T21:00:00.000Z', chargedAmount: -50, description: 'CANVA PRO', status: 'completed' },
+  { type: 'normal', date: '2026-10-08T21:00:00.000Z', chargedAmount: -30, description: 'Spotify', status: 'completed' }
+] }] }, 'cal', 'joint');
+const fbz = prepareNew(bt, [], cfgB, cfg.members);
+assert.deepStrictEqual(fbz.map(t => t.biz), [true, true, false, false], 'keyword, learned biz rule, learned home rule overrides keyword');
+assert.deepStrictEqual(fbz.map(t => t.categoryId), ['biz_software', null, 'subscriptions', 'subscriptions']);
+assert.strictEqual(toRow(fbz[0], 'h').is_business, true);
+assert.ok(prepareNew(bt, [], cfgB, cfg.members, true).every(t => t.biz), 'business account marks all');
+
 console.log('כל הבדיקות עברו ✔');

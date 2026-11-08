@@ -13,13 +13,24 @@ const PROVIDERS = {
   max:      { name: 'מקס',         kind: 'card', company: 'max',      fields: [['username', 'שם משתמש'], ['password', 'סיסמה']] }
 };
 
-const GROUP_KIND = { income: 'income', fixed: 'expense', variable: 'expense', periodic: 'expense', debt: 'expense', transfer: 'neutral' };
+const GROUP_KIND = { income: 'income', fixed: 'expense', variable: 'expense', periodic: 'expense', debt: 'expense', biz_income: 'income', biz_expense: 'expense', transfer: 'neutral' };
+const BIZ_GROUPS = new Set(['biz_income', 'biz_expense']);
+// זהה לרשימת ברירת המחדל ב-app.js
+const DEFAULT_BIZ_KEYWORDS = ['adobe', 'canva', 'figma', 'wix', 'zoom.us', 'notion', 'slack', 'dropbox', 'godaddy', 'namecheap', 'shopify', 'mailchimp', 'monday.com', 'hubspot', 'squarespace', 'webflow', 'envato', 'freepik', 'shutterstock', 'google ads', 'facebk ads', 'meta ads', 'linkedin', 'חשבונית ירוקה', 'greeninvoice', 'icount', 'חשבונית מס', 'רואה חשבון', 'רו"ח', 'הנהלת חשבונות', 'מקדמות מס', 'מע"מ', 'דפוס', 'ציוד משרדי', 'אופיס דיפו', 'office depot', 'סליקה'];
+
+function detectBiz(cfg, desc) {
+  const d = ` ${String(desc || '').toLowerCase()} `;
+  const hit = (cfg.bizRules || []).filter(r => r.pattern && d.includes(r.pattern.toLowerCase())).sort((a, b) => b.pattern.length - a.pattern.length)[0];
+  if (hit) return !!hit.biz;
+  const kws = Array.isArray((cfg.settings || {}).bizKeywords) ? cfg.settings.bizKeywords : DEFAULT_BIZ_KEYWORDS;
+  return kws.some(k => k && d.includes(k.toLowerCase()));
+}
 
 function israelDate(iso) {
   return new Date(iso).toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' }); // YYYY-MM-DD
 }
 
-function categorize(cfg, desc, type, provider) {
+function categorize(cfg, desc, type, provider, biz = false) {
   const d = ` ${String(desc || '').toLowerCase()} `;
   const pkind = (PROVIDERS[provider] || {}).kind || 'bank';
   const cats = new Map((cfg.categories || []).map(c => [c.id, c]));
@@ -27,6 +38,7 @@ function categorize(cfg, desc, type, provider) {
     if (!c || !c.enabled) return false;
     const k = GROUP_KIND[c.group];
     if (k === 'neutral') return pkind === 'bank';
+    if (BIZ_GROUPS.has(c.group) !== !!biz) return false;
     return k === type;
   };
   const hits = (cfg.rules || []).filter(r => r.pattern && d.includes(r.pattern.toLowerCase()) && fits(cats.get(r.categoryId)))
@@ -68,7 +80,7 @@ function convertScrape(result, provider, memberId) {
 }
 
 /* מסנן כפילויות מול מה שכבר קיים בענן, מסווג ומוסיף מזהים */
-function prepareNew(incoming, existingRows, cfg, members) {
+function prepareNew(incoming, existingRows, cfg, members, businessAccount = false) {
   const existing = {};
   for (const r of existingRows) {
     const t = { date: String(r.date).slice(0, 10), amount: +r.amount, type: r.type, desc: r.description, provider: r.provider, memberId: r.member_key };
@@ -80,15 +92,16 @@ function prepareNew(incoming, existingRows, cfg, members) {
     const h = txHash(t);
     seen[h] = (seen[h] || 0) + 1;
     if (seen[h] <= (existing[h] || 0)) continue;
-    let categoryId = categorize(cfg, t.desc, t.type, t.provider);
-    if (!categoryId && t.type === 'income' && /משכורת|שכר עבודה|^שכר/.test(t.desc)) categoryId = t.memberId === (members[0] || {}).id ? 'salary1' : 'salary2';
-    fresh.push({ ...t, id: crypto.randomUUID(), hash: h, categoryId });
+    const biz = businessAccount || detectBiz(cfg, t.desc);
+    let categoryId = categorize(cfg, t.desc, t.type, t.provider, biz);
+    if (!categoryId && !biz && t.memberId !== 'joint' && t.type === 'income' && /משכורת|שכר עבודה|^שכר/.test(t.desc)) categoryId = t.memberId === (members[0] || {}).id ? 'salary1' : 'salary2';
+    fresh.push({ ...t, id: crypto.randomUUID(), hash: h, categoryId, biz });
   }
   return fresh;
 }
 
 function toRow(t, householdId) {
-  return { id: t.id, household_id: householdId, date: t.date, amount: t.amount, type: t.type, description: t.desc, category_id: t.categoryId || null, member_key: t.memberId, provider: t.provider, note: t.note || '', hash: t.hash };
+  return { id: t.id, household_id: householdId, date: t.date, amount: t.amount, type: t.type, description: t.desc, category_id: t.categoryId || null, member_key: t.memberId, provider: t.provider, note: t.note || '', hash: t.hash, is_business: !!t.biz };
 }
 
-module.exports = { PROVIDERS, categorize, convertScrape, prepareNew, toRow, txHash, israelDate };
+module.exports = { PROVIDERS, detectBiz, categorize, convertScrape, prepareNew, toRow, txHash, israelDate };

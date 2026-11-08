@@ -57,7 +57,7 @@ function defaultState() {
 }
 
 let state = null; // נטען מהענן אחרי התחברות (cloud.js)
-const ui = { route: 'month', ym: currentYm(), year: new Date().getFullYear(), filters: { q: '', cat: '', member: '', type: '' }, setupStep: 1, settingsTab: 'categories', onlyActive: true, imp: null, authMode: 'login', busy: false };
+const ui = { route: 'month', ym: currentYm(), year: new Date().getFullYear(), filters: { q: '', cat: '', member: '', type: '', scope: '' }, setupStep: 1, settingsTab: 'categories', onlyActive: true, imp: null, authMode: 'login', busy: false };
 
 function normalizeState(s) {
   if (!s || !Array.isArray(s.categories)) return defaultState();
@@ -69,7 +69,7 @@ function normalizeState(s) {
     else { const c = s.categories.find(x => x.id === id); if (!c.custom && !c.keywordsEdited) c.keywords = keywords; }
   });
   s.settings = Object.assign(defaultState().settings, s.settings || {});
-  s.rules ||= []; s.goals ||= []; s.transactions ||= [];
+  s.rules ||= []; s.bizRules ||= []; s.goals ||= []; s.transactions ||= [];
   if (!Array.isArray(s.members) || s.members.length < 2) s.members = defaultState().members;
   return s;
 }
@@ -79,17 +79,37 @@ const myMember = () => (state.members.some(m => m.id === Cloud.me) ? Cloud.me : 
 const cat = id => state.categories.find(c => c.id === id);
 const groupOf = id => GROUPS.find(g => g.id === id);
 const kindOfCat = c => (c ? groupOf(c.group).kind : null);
-const memberName = id => (state.members.find(m => m.id === id) || {}).name || '';
+const JOINT = { id: 'joint', name: 'משותף' };
+const owners = () => [...state.members, JOINT];
+const memberName = id => (owners().find(m => m.id === id) || {}).name || '';
+const ownerOptions = sel => owners().map(m => `<option value="${m.id}" ${sel === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
 const isCounted = t => { const c = cat(t.categoryId); return !c || c.group !== 'transfer'; };
+const isBizGroup = gid => !!(groupOf(gid) || {}).biz;
+
+/* ================= זיהוי עסק מול בית ================= */
+const DEFAULT_BIZ_KEYWORDS = ['adobe', 'canva', 'figma', 'wix', 'zoom.us', 'notion', 'slack', 'dropbox', 'godaddy', 'namecheap', 'shopify', 'mailchimp', 'monday.com', 'hubspot', 'squarespace', 'webflow', 'envato', 'freepik', 'shutterstock', 'google ads', 'facebk ads', 'meta ads', 'linkedin', 'חשבונית ירוקה', 'greeninvoice', 'icount', 'חשבונית מס', 'רואה חשבון', 'רו"ח', 'הנהלת חשבונות', 'מקדמות מס', 'מע"מ', 'דפוס', 'ציוד משרדי', 'אופיס דיפו', 'office depot', 'סליקה'];
+const bizKeywords = () => (Array.isArray(state.settings.bizKeywords) ? state.settings.bizKeywords : DEFAULT_BIZ_KEYWORDS);
+/* מחזיר true/false: חוקים שלמדנו מהמשתמש קודם, אחר כך מילות מפתח של עסק */
+function detectBiz(desc) {
+  const d = ` ${String(desc || '').toLowerCase()} `;
+  const hit = (state.bizRules || []).filter(r => r.pattern && d.includes(r.pattern.toLowerCase())).sort((a, b) => b.pattern.length - a.pattern.length)[0];
+  if (hit) return !!hit.biz;
+  return bizKeywords().some(k => k && d.includes(k.toLowerCase()));
+}
+function rememberBiz(pattern, biz) {
+  state.bizRules = (state.bizRules || []).filter(r => r.pattern !== pattern);
+  state.bizRules.push({ id: uid(), pattern, biz });
+}
 
 /* ================= סיווג אוטומטי ================= */
-function categorize(desc, type, provider) {
+function categorize(desc, type, provider, biz = false) {
   const d = ` ${String(desc || '').toLowerCase()} `;
   const pkind = providerById(provider).kind;
   const fits = c => {
     if (!c || !c.enabled) return false;
     const k = kindOfCat(c);
     if (k === 'neutral') return pkind === 'bank';
+    if (isBizGroup(c.group) !== !!biz) return false;
     return k === type;
   };
   // חוקים של המשתמש קודם
@@ -112,8 +132,15 @@ function txOfMonth(ym) { return state.transactions.filter(t => t.date.startsWith
 function monthStats(ym) {
   const txs = txOfMonth(ym);
   let income = 0, expense = 0; const byCat = {}; const byGroup = {}; let uncategorized = 0;
+  const biz = { income: 0, expense: 0, count: 0 };
   for (const t of txs) {
     if (!isCounted(t)) continue;
+    if (t.biz) { // עסק: נספר בנפרד מתקציב הבית
+      biz[t.type] += t.amount; biz.count++;
+      if (!t.categoryId) uncategorized++;
+      const k = t.categoryId || '__none_biz'; byCat[k] = (byCat[k] || 0) + t.amount;
+      continue;
+    }
     if (t.type === 'income') income += t.amount; else expense += t.amount;
     const key = t.categoryId || '__none';
     if (!t.categoryId) uncategorized++;
@@ -122,21 +149,22 @@ function monthStats(ym) {
     const g = c ? c.group : (t.type === 'income' ? 'income' : 'variable');
     if (t.type === 'expense') byGroup[g] = (byGroup[g] || 0) + t.amount;
   }
-  return { txs, income, expense, balance: income - expense, byCat, byGroup, uncategorized };
+  return { txs, income, expense, balance: income - expense, byCat, byGroup, uncategorized, biz };
 }
 function yearMatrix(year) {
   const m = {}; // catId -> [12]
-  const inc = Array(12).fill(0), exp = Array(12).fill(0);
+  const inc = Array(12).fill(0), exp = Array(12).fill(0), bInc = Array(12).fill(0), bExp = Array(12).fill(0);
   for (const t of state.transactions) {
     if (!t.date.startsWith(String(year)) || !isCounted(t)) continue;
     const mi = +t.date.slice(5, 7) - 1;
-    const key = t.categoryId || (t.type === 'income' ? '__none_in' : '__none_ex');
+    const key = t.categoryId || (t.biz ? (t.type === 'income' ? '__none_bin' : '__none_bex') : (t.type === 'income' ? '__none_in' : '__none_ex'));
     (m[key] ||= Array(12).fill(0))[mi] += t.amount;
-    if (t.type === 'income') inc[mi] += t.amount; else exp[mi] += t.amount;
+    if (t.biz) { if (t.type === 'income') bInc[mi] += t.amount; else bExp[mi] += t.amount; }
+    else if (t.type === 'income') inc[mi] += t.amount; else exp[mi] += t.amount;
   }
-  return { m, inc, exp };
+  return { m, inc, exp, bInc, bExp };
 }
-const totalBudget = kind => state.categories.filter(c => c.enabled && kindOfCat(c) === kind).reduce((s, c) => s + (+c.budget || 0), 0);
+const totalBudget = kind => state.categories.filter(c => c.enabled && kindOfCat(c) === kind && !isBizGroup(c.group)).reduce((s, c) => s + (+c.budget || 0), 0);
 
 /* ================= ניווט ================= */
 const ROUTES = [
@@ -212,6 +240,15 @@ function viewMonth() {
     <div class="card kpi"><div class="k-label">יעד חיסכון חודשי</div>${target ? `<div class="k-value num ${s.balance >= target ? 'pos' : ''}">${Math.max(0, Math.round(s.balance / target * 100))}%</div><div class="k-sub">יעד: ${fmt(target)} לחודש</div>` : `<div class="k-value">—</div><div class="k-sub"><a href="#/goals">להגדרת יעד</a></div>`}</div>
   </section>
 
+  ${s.biz.count ? `<section class="card biz-card" aria-labelledby="h-biz" style="margin-bottom:16px">
+    <div class="card-head"><h2 id="h-biz"><span class="dot" style="background:var(--c-biz)"></span> העסק החודש</h2><a class="btn sm" href="#/tx" data-action="filter-biz">לתנועות העסק</a></div>
+    <div class="grid kpis" style="margin:0">
+      <div><div class="k-label muted small">הכנסות העסק</div><div class="num" style="font-size:1.3rem;font-weight:700">${fmt(s.biz.income)}</div></div>
+      <div><div class="k-label muted small">הוצאות העסק</div><div class="num" style="font-size:1.3rem;font-weight:700">${fmt(s.biz.expense)}</div></div>
+      <div><div class="k-label muted small">רווח</div><div class="num ${s.biz.income - s.biz.expense >= 0 ? 'pos' : 'neg'}" style="font-size:1.3rem;font-weight:700">${fmt(s.biz.income - s.biz.expense)}</div></div>
+    </div>
+    <p class="small muted" style="margin-top:8px">תנועות העסק לא נכללות בהכנסות, בהוצאות ובתקציב של הבית שלמעלה.</p>
+  </section>` : ''}
   <div class="grid two">
     <section class="card" aria-labelledby="h-budget">
       <div class="card-head"><h2 id="h-budget">ביצוע מול תקציב</h2><a class="btn sm" href="#/settings" data-action="settings-tab" data-tab="categories">עריכת תקציב</a></div>
@@ -231,7 +268,7 @@ function viewMonth() {
 }
 
 function budgetBlock(s) {
-  const groups = GROUPS.filter(g => g.kind === 'expense');
+  const groups = GROUPS.filter(g => g.kind === 'expense' && !g.biz);
   let any = false;
   const html = groups.map(g => {
     const cats = state.categories.filter(c => c.group === g.id && (c.enabled || s.byCat[c.id]) && ((+c.budget) || s.byCat[c.id]));
@@ -257,7 +294,7 @@ function budgetRow(c, actual) {
   </div>`;
 }
 function donutBlock(s) {
-  const parts = GROUPS.filter(g => g.kind === 'expense').map(g => ({ g, v: s.byGroup[g.id] || 0 })).filter(p => p.v > 0);
+  const parts = GROUPS.filter(g => g.kind === 'expense' && !g.biz).map(g => ({ g, v: s.byGroup[g.id] || 0 })).filter(p => p.v > 0);
   const total = parts.reduce((a, p) => a + p.v, 0);
   if (!total) return `<p class="muted">אין הוצאות בחודש הזה.</p>`;
   const R = 60, C = 2 * Math.PI * R; let off = 0;
@@ -278,8 +315,8 @@ function recentBlock(s) {
 }
 
 /* ---------- תנועות ---------- */
-function catOptions(type, selected) {
-  const groups = GROUPS.filter(g => (type === 'income' ? g.kind === 'income' : g.kind === 'expense') || g.kind === 'neutral');
+function catOptions(type, selected, biz = false) {
+  const groups = GROUPS.filter(g => ((type === 'income' ? g.kind === 'income' : g.kind === 'expense') && !!g.biz === !!biz) || g.kind === 'neutral');
   return `<option value="">— לא מסווג —</option>` + groups.map(g => {
     const cats = state.categories.filter(c => c.group === g.id && (c.enabled || c.id === selected));
     if (!cats.length) return '';
@@ -292,7 +329,8 @@ function filteredTx() {
     (!q || t.desc.toLowerCase().includes(q) || (t.note || '').toLowerCase().includes(q)) &&
     (!f.cat || (f.cat === '__none' ? !t.categoryId : t.categoryId === f.cat)) &&
     (!f.member || t.memberId === f.member) &&
-    (!f.type || t.type === f.type)
+    (!f.type || t.type === f.type) &&
+    (!f.scope || (f.scope === 'biz' ? t.biz : !t.biz))
   ).sort((a, b) => b.date.localeCompare(a.date) || a.desc.localeCompare(b.desc));
 }
 function viewTx() {
@@ -314,8 +352,9 @@ function viewTx() {
     <div class="filters" role="search" aria-label="סינון תנועות">
       <div class="field search"><label for="f-q" class="sr-only">חיפוש</label><input id="f-q" class="input" type="search" placeholder="חיפוש לפי שם בית עסק או הערה" value="${esc(f.q)}" data-filter="q"></div>
       <div class="field"><label for="f-cat" class="sr-only">סעיף</label><select id="f-cat" class="input" data-filter="cat"><option value="">כל הסעיפים</option><option value="__none" ${f.cat === '__none' ? 'selected' : ''}>לא מסווגות</option>${allCatsOpt}</select></div>
-      <div class="field"><label for="f-mem" class="sr-only">מי</label><select id="f-mem" class="input" data-filter="member"><option value="">שנינו</option>${state.members.map(m => `<option value="${m.id}" ${f.member === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select></div>
+      <div class="field"><label for="f-mem" class="sr-only">מי</label><select id="f-mem" class="input" data-filter="member"><option value="">כל החשבונות</option>${ownerOptions(f.member)}</select></div>
       <div class="field"><label for="f-type" class="sr-only">סוג</label><select id="f-type" class="input" data-filter="type"><option value="">הכנסות והוצאות</option><option value="expense" ${f.type === 'expense' ? 'selected' : ''}>הוצאות</option><option value="income" ${f.type === 'income' ? 'selected' : ''}>הכנסות</option></select></div>
+      <div class="field"><label for="f-scope" class="sr-only">בית או עסק</label><select id="f-scope" class="input" data-filter="scope"><option value="">בית ועסק</option><option value="home" ${f.scope === 'home' ? 'selected' : ''}>בית בלבד</option><option value="biz" ${f.scope === 'biz' ? 'selected' : ''}>עסק בלבד</option></select></div>
     </div>
     <p class="small muted" aria-live="polite" style="margin-bottom:8px">${list.length} תנועות · הכנסות <span class="num">${fmt(sumIn)}</span> · הוצאות <span class="num">${fmt(sumOut)}</span></p>
     ${list.length ? `<table class="tx-table">
@@ -332,22 +371,25 @@ function txRow(t) {
     <td class="c-date num">${dateLabel(t.date)}</td>
     <td class="c-desc"><div class="tx-desc">${esc(t.desc)}</div>${t.note ? `<div class="tx-meta">${esc(t.note)}</div>` : ''}</td>
     <td class="c-src"><div class="small">${esc(p.name)}</div><div class="tx-meta">${esc(memberName(t.memberId))}</div></td>
-    <td class="c-cat"><label class="sr-only" for="c-${t.id}">סעיף עבור ${esc(t.desc)}</label><select id="c-${t.id}" class="input sm" data-action="set-cat" data-id="${t.id}">${catOptions(t.type, t.categoryId)}</select></td>
+    <td class="c-cat"><label class="sr-only" for="c-${t.id}">סעיף עבור ${esc(t.desc)}</label><select id="c-${t.id}" class="input sm" data-action="set-cat" data-id="${t.id}">${catOptions(t.type, t.categoryId, t.biz)}</select></td>
     <td class="amount num ${t.type === 'income' ? 'in' : ''}" ${counted ? '' : 'style="opacity:.55;text-decoration:line-through"'}>${t.type === 'income' ? '+' : ''}${fmt2(t.amount)}</td>
-    <td class="tx-actions"><button class="icon-btn sm" data-action="edit-tx" data-id="${t.id}" aria-label="עריכת ${esc(t.desc)}">${icon('edit')}</button><button class="icon-btn sm danger" data-action="del-tx" data-id="${t.id}" aria-label="מחיקת ${esc(t.desc)}">${icon('trash')}</button></td>
+    <td class="tx-actions"><button class="biz-toggle" data-action="toggle-biz" data-id="${t.id}" aria-pressed="${t.biz ? 'true' : 'false'}" aria-label="הוצאת עסק: ${esc(t.desc)}" title="סימון כתנועת עסק">עסק</button><button class="icon-btn sm" data-action="edit-tx" data-id="${t.id}" aria-label="עריכת ${esc(t.desc)}">${icon('edit')}</button><button class="icon-btn sm danger" data-action="del-tx" data-id="${t.id}" aria-label="מחיקת ${esc(t.desc)}">${icon('trash')}</button></td>
   </tr>`;
 }
 
 /* ---------- שנתי ---------- */
 function viewYear() {
-  const Y = ui.year; const { m, inc, exp } = yearMatrix(Y);
+  const Y = ui.year; const { m, inc, exp, bInc, bExp } = yearMatrix(Y);
+  const bTotIn = bInc.reduce((a, b) => a + b, 0), bTotEx = bExp.reduce((a, b) => a + b, 0);
+  const hasBiz = bTotIn + bTotEx > 0 || state.transactions.some(t => t.biz);
   const totIn = inc.reduce((a, b) => a + b, 0), totEx = exp.reduce((a, b) => a + b, 0);
   const monthsWithData = inc.map((v, i) => v + exp[i] > 0).filter(Boolean).length || 1;
   const rate = totIn ? Math.round((totIn - totEx) / totIn * 100) : 0;
 
   const rowsFor = g => {
     const cats = state.categories.filter(c => c.group === g.id && (m[c.id] || (!ui.onlyActive && c.enabled) || (ui.onlyActive && c.enabled && +c.budget)));
-    const extra = g.id === 'income' && m.__none_in ? [{ id: '__none_in', name: 'לא מסווג' }] : g.id === 'variable' && m.__none_ex ? [{ id: '__none_ex', name: 'לא מסווג' }] : [];
+    const NONE = { income: '__none_in', variable: '__none_ex', biz_income: '__none_bin', biz_expense: '__none_bex' };
+    const extra = NONE[g.id] && m[NONE[g.id]] ? [{ id: NONE[g.id], name: 'לא מסווג' }] : [];
     const all = [...cats, ...extra];
     if (!all.length) return '';
     const gArr = Array(12).fill(0); all.forEach(c => (m[c.id] || []).forEach((v, i) => gArr[i] += v));
@@ -385,10 +427,13 @@ function viewYear() {
       <table class="year-table">
         <thead><tr><th scope="col">סעיף</th>${HEB_MONTHS.map(n => `<th scope="col">${n}</th>`).join('')}<th scope="col">סה״כ</th><th scope="col">ממוצע</th><th scope="col">תקציב שנתי</th></tr></thead>
         <tbody>
-          ${GROUPS.filter(g => g.kind !== 'neutral').map(rowsFor).join('')}
+          ${GROUPS.filter(g => g.kind !== 'neutral' && !g.biz).map(rowsFor).join('')}
           <tr class="total"><td>סה״כ הכנסות</td>${inc.map(v => `<td class="num">${fmt(v)}</td>`).join('')}<td class="num">${fmt(totIn)}</td><td class="num">${fmt(totIn / monthsWithData)}</td><td></td></tr>
           <tr class="total"><td>סה״כ הוצאות</td>${exp.map(v => `<td class="num">${fmt(v)}</td>`).join('')}<td class="num">${fmt(totEx)}</td><td class="num">${fmt(totEx / monthsWithData)}</td><td></td></tr>
           <tr class="total"><td>הפרש</td>${inc.map((v, i) => `<td class="num ${v - exp[i] < 0 ? 'neg' : ''}">${fmt(v - exp[i])}</td>`).join('')}<td class="num">${fmt(totIn - totEx)}</td><td class="num">${fmt((totIn - totEx) / monthsWithData)}</td><td></td></tr>
+          ${hasBiz ? `<tr><td colspan="16" style="background:var(--surface);border-bottom:0;padding-top:20px"><strong>העסק</strong> <span class="muted small">(לא נכלל בסיכומי הבית)</span></td></tr>
+          ${GROUPS.filter(g => g.biz).map(rowsFor).join('')}
+          <tr class="total"><td>רווח העסק</td>${bInc.map((v, i) => `<td class="num ${v - bExp[i] < 0 ? 'neg' : ''}">${fmt(v - bExp[i])}</td>`).join('')}<td class="num">${fmt(bTotIn - bTotEx)}</td><td class="num">${fmt((bTotIn - bTotEx) / monthsWithData)}</td><td></td></tr>` : ''}
         </tbody>
       </table>
     </div>
@@ -523,7 +568,7 @@ function settingsConnections() {
     <div class="callout info">${icon('link')}<div class="grow"><strong>סנכרון אוטומטי לקריאה בלבד.</strong> תוכנת הסנכרון במחשב הביתי מושכת כל יום את התנועות מהבנק ומחברות האשראי, ופרטי הכניסה נשמרים מוצפנים רק שם. אפשר תמיד לייבא גם קובץ אקסל ידנית.</div></div>
     <ul class="provider-list">${provs.map(p => `<li class="provider">
       <div class="p-head"><h3>${esc(p.name)}</h3><span class="pill">${p.kind === 'bank' ? 'בנק' : 'אשראי'}</span></div>
-      ${state.members.map(m => {
+      ${owners().filter(m => m.id !== 'joint' || lastImport(p.id, 'joint') || (Cloud.syncRows || []).some(r => r.provider === p.id && r.member_key === 'joint')).map(m => {
         const li = lastImport(p.id, m.id);
         const ss = (Cloud.syncRows || []).find(r => r.provider === p.id && r.member_key === m.id);
         const when = ss ? new Date(ss.last_run).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
@@ -555,6 +600,16 @@ function settingsRules() {
       <div class="btn-row"><button class="btn primary" type="submit">הוספת חוק</button><button class="btn" type="button" data-action="recat-all">החלה מחדש על תנועות לא מסווגות</button></div>
     </form>
     ${state.rules.length ? `<ul class="rule-list">${state.rules.map(r => `<li><div class="grow"><strong>${esc(r.pattern)}</strong> <span class="muted">←</span> ${esc(cat(r.categoryId)?.name || '?')}</div><button class="icon-btn sm danger" data-action="del-rule" data-id="${r.id}" aria-label="מחיקת החוק ${esc(r.pattern)}">${icon('trash')}</button></li>`).join('')}</ul>` : '<p class="muted small">אין עדיין חוקים אישיים. הסיווג הבסיסי מזהה רשתות מוכרות (סופרים, דלק, תקשורת ועוד).</p>'}
+  </section>
+  <section class="card">
+    <div class="card-head"><h2><span class="dot" style="background:var(--c-biz)"></span> זיהוי תשלומי עסק</h2></div>
+    <p class="small muted" style="margin-bottom:12px">תנועה שהתיאור שלה מכיל אחת מהמילים כאן מסומנת אוטומטית כ״עסק״ ולא נספרת בתקציב הבית. הוסיפו את הספקים של העסק שלכם, למשל ספקי חומרים, תוכנות וכלים. מפרידים בפסיק.</p>
+    <form class="form-grid" data-form="biz-keywords" style="margin-bottom:12px">
+      <div class="field"><label for="bk">מילים שמזהות עסק</label><textarea id="bk" name="keywords" class="input" rows="4">${esc(bizKeywords().join(', '))}</textarea></div>
+      <div class="btn-row"><button class="btn primary" type="submit">שמירה</button><button class="btn" type="button" data-action="redetect-biz">זיהוי מחדש בכל התנועות</button></div>
+    </form>
+    <h3 style="margin:8px 0">מה למדנו ממך</h3>
+    ${(state.bizRules || []).length ? `<ul class="rule-list">${state.bizRules.map(r => `<li><div class="grow"><strong>${esc(r.pattern)}</strong> <span class="muted">←</span> ${r.biz ? '<span class="tag biz">תמיד עסק</span>' : '<span class="tag">תמיד בית</span>'}</div><button class="icon-btn sm danger" data-action="del-bizrule" data-id="${r.id}" aria-label="מחיקת הכלל ${esc(r.pattern)}">${icon('trash')}</button></li>`).join('')}</ul>` : '<p class="muted small">עוד אין. כשמסמנים תנועה כעסק או מחזירים אותה לבית, אפשר לבחור ״לזכור״ והכלל יופיע כאן.</p>'}
   </section>`;
 }
 function settingsGeneral() {
@@ -707,8 +762,9 @@ function txDialog(t) {
       <div class="field"><label for="t-amount">סכום (₪)</label><input id="t-amount" name="amount" class="input" type="number" step="0.01" min="0.01" inputmode="decimal" required value="${t.amount}"></div>
       <div class="field"><label for="t-date">תאריך</label><input id="t-date" name="date" class="input" type="date" required value="${t.date}"></div>
       <div class="field" style="grid-column:1/-1"><label for="t-desc">תיאור</label><input id="t-desc" name="desc" class="input" required value="${esc(t.desc)}" placeholder="למשל: שופרסל, משכורת"></div>
-      <div class="field"><label for="t-cat">סעיף</label><select id="t-cat" name="categoryId" class="input">${catOptions(t.type, t.categoryId)}</select></div>
-      <div class="field"><label for="t-mem">של מי</label><select id="t-mem" name="memberId" class="input">${state.members.map(m => `<option value="${m.id}" ${t.memberId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select></div>
+      <div class="field" style="grid-column:1/-1"><label class="toggle-row"><input type="checkbox" name="biz" id="t-biz" data-action="tx-biz" ${t.biz ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--primary)"> תנועה של העסק (לא נספרת בתקציב הבית)</label></div>
+      <div class="field"><label for="t-cat">סעיף</label><select id="t-cat" name="categoryId" class="input">${catOptions(t.type, t.categoryId, t.biz)}</select></div>
+      <div class="field"><label for="t-mem">חשבון של</label><select id="t-mem" name="memberId" class="input">${ownerOptions(t.memberId)}</select></div>
       <div class="field" style="grid-column:1/-1"><label for="t-note">הערה (לא חובה)</label><input id="t-note" name="note" class="input" value="${esc(t.note || '')}"></div>
     </form>`,
     `<button class="btn primary" type="submit" form="tx-form">שמירה</button><button class="btn" data-action="close-dlg">ביטול</button>`);
@@ -755,10 +811,11 @@ function importDialog(provider = '') {
 function renderImport() {
   const imp = ui.imp;
   const provOpts = PROVIDERS.filter(p => p.kind !== 'manual').map(p => `<option value="${p.id}" ${imp.provider === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
-  const memOpts = state.members.map(m => `<option value="${m.id}" ${imp.member === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
   let body = `<div class="form-grid two" style="margin-bottom:14px">
       <div class="field"><label for="i-prov">מאיפה הקובץ?</label><select id="i-prov" class="input" data-imp="provider">${provOpts}</select></div>
-      <div class="field"><label for="i-mem">של מי החשבון?</label><select id="i-mem" class="input" data-imp="member">${memOpts}</select></div>
+      <div class="field"><label for="i-mem">של מי החשבון?</label><select id="i-mem" class="input" data-imp="member">${ownerOptions(imp.member)}</select></div>
+      <div class="field" style="grid-column:1/-1"><label class="toggle-row"><input type="checkbox" id="i-biz" data-action="imp-biz" ${imp.biz ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--primary)"> זה חשבון או כרטיס של העסק (כל התנועות יסומנו כעסק)</label>
+        <span class="hint">בלי הסימון, תנועות עסק יזוהו אוטומטית לפי שם בית העסק (תוכנות, רואה חשבון וכו׳), ואפשר לתקן אחר כך.</span></div>
     </div>`;
   let foot = `<button class="btn" data-action="close-dlg">ביטול</button>`;
   if (!imp.rows) {
@@ -770,6 +827,7 @@ function renderImport() {
     const parsed = buildImported();
     const fresh = parsed.filter(p => !p.dup);
     const autoCat = fresh.filter(p => p.categoryId).length;
+    const bizCount = fresh.filter(p => p.biz).length;
     body += `<p class="small" style="margin-bottom:10px">קובץ: <strong>${esc(imp.fileName)}</strong> · <button class="btn link small" data-action="imp-reset">קובץ אחר</button></p>
       <details ${imp.mapOpen ? 'open' : ''} style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:500">התאמת עמודות (זוהה אוטומטית)</summary>
         <div class="form-grid two" style="margin-top:10px">
@@ -780,9 +838,9 @@ function renderImport() {
             <option value="two" ${imp.map.mode === 'two' ? 'selected' : ''}>שתי עמודות: חובה וזכות (בנק)</option></select></div>
           ${imp.map.mode === 'two' ? sel('debit', 'עמודת חובה (הוצאה)') + sel('credit', 'עמודת זכות (הכנסה)') : sel('amount', 'סכום')}
         </div></details>
-      <p aria-live="polite" style="margin-bottom:8px"><strong>${fresh.length}</strong> תנועות חדשות · ${autoCat} סווגו אוטומטית${parsed.length - fresh.length ? ` · ${parsed.length - fresh.length} כבר קיימות וידולגו` : ''}</p>
+      <p aria-live="polite" style="margin-bottom:8px"><strong>${fresh.length}</strong> תנועות חדשות · ${autoCat} סווגו אוטומטית${bizCount ? ` · ${bizCount} זוהו כעסק` : ''}${parsed.length - fresh.length ? ` · ${parsed.length - fresh.length} כבר קיימות וידולגו` : ''}</p>
       ${parsed.length ? `<div class="table-scroll"><table class="preview-table"><thead><tr><th scope="col">תאריך</th><th scope="col">תיאור</th><th scope="col">סכום</th><th scope="col">סעיף</th></tr></thead><tbody>
-        ${parsed.slice(0, 8).map(p => `<tr ${p.dup ? 'style="opacity:.5"' : ''}><td class="num">${dateLabel(p.date)}</td><td>${esc(p.desc)}</td><td class="num ${p.type === 'income' ? 'pos' : ''}">${p.type === 'income' ? '+' : ''}${fmt2(p.amount)}</td><td>${p.dup ? 'קיים' : p.categoryId ? esc(cat(p.categoryId).name) : '<span class="tag none">לא מסווג</span>'}</td></tr>`).join('')}
+        ${parsed.slice(0, 8).map(p => `<tr ${p.dup ? 'style="opacity:.5"' : ''}><td class="num">${dateLabel(p.date)}</td><td>${esc(p.desc)}</td><td class="num ${p.type === 'income' ? 'pos' : ''}">${p.type === 'income' ? '+' : ''}${fmt2(p.amount)}</td><td>${p.dup ? 'קיים' : (p.biz ? '<span class="tag biz">עסק</span> ' : '') + (p.categoryId ? esc(cat(p.categoryId).name) : '<span class="tag none">לא מסווג</span>')}</td></tr>`).join('')}
         </tbody></table></div>${parsed.length > 8 ? `<p class="small muted" style="margin-top:6px">ועוד ${parsed.length - 8}…</p>` : ''}`
         : `<p class="neg">לא נמצאו תנועות. בדקו את התאמת העמודות למעלה.</p>`}`;
     foot = `<button class="btn primary" data-action="imp-confirm" ${fresh.length ? '' : 'disabled'}>ייבוא ${fresh.length} תנועות</button>` + foot;
@@ -909,8 +967,10 @@ function buildImported() {
   // זיהוי כפילויות
   const existing = {}; state.transactions.forEach(t => { const h = t.hash || txHash(t); existing[h] = (existing[h] || 0) + 1; });
   const seen = {};
-  for (const p of out) { p.hash = txHash(p); seen[p.hash] = (seen[p.hash] || 0) + 1; p.dup = seen[p.hash] <= (existing[p.hash] || 0); p.categoryId = p.dup ? null : categorize(p.desc, p.type, p.provider);
-    if (!p.dup && !p.categoryId && p.type === 'income' && /משכורת|שכר עבודה|^שכר/.test(p.desc)) p.categoryId = p.memberId === state.members[0].id ? 'salary1' : 'salary2'; }
+  for (const p of out) { p.hash = txHash(p); seen[p.hash] = (seen[p.hash] || 0) + 1; p.dup = seen[p.hash] <= (existing[p.hash] || 0);
+    p.biz = !!ui.imp.biz || detectBiz(p.desc);
+    p.categoryId = p.dup ? null : categorize(p.desc, p.type, p.provider, p.biz);
+    if (!p.dup && !p.categoryId && !p.biz && p.memberId !== 'joint' && p.type === 'income' && /משכורת|שכר עבודה|^שכר/.test(p.desc)) p.categoryId = p.memberId === state.members[0].id ? 'salary1' : 'salary2'; }
   return out;
 }
 function confirmImport() {
@@ -1000,7 +1060,20 @@ document.addEventListener('click', e => {
   switch (a) {
     case 'month-shift': ui.ym = shiftYm(ui.ym, +el.dataset.d); render(); $(`[data-action="month-shift"][data-d="${el.dataset.d}"]`)?.focus(); break;
     case 'year-shift': ui.year += +el.dataset.d; render(); $(`[data-action="year-shift"][data-d="${el.dataset.d}"]`)?.focus(); break;
-    case 'filter-none': ui.filters = { q: '', cat: '__none', member: '', type: '' }; break;
+    case 'filter-none': ui.filters = { q: '', cat: '__none', member: '', type: '', scope: '' }; break;
+    case 'filter-biz': ui.filters = { q: '', cat: '', member: '', type: '', scope: 'biz' }; break;
+    case 'toggle-biz': {
+      const t = state.transactions.find(x => x.id === id);
+      const setBiz = (x, v) => { x.biz = v; const c = cat(x.categoryId); if (!c || (c.group !== 'transfer' && isBizGroup(c.group) !== v)) x.categoryId = categorize(x.desc, x.type, x.provider, v); };
+      setBiz(t, !t.biz);
+      save(); rerenderKeepFocus(el);
+      const b = $(`[data-action="toggle-biz"][data-id="${id}"]`); if (b) b.focus();
+      const same = state.transactions.filter(x => x.id !== t.id && x.desc === t.desc && !!x.biz !== t.biz);
+      toast(`${t.biz ? 'סומן כעסק' : 'הוחזר לבית'}. לזכור ש״${t.desc}״ ${t.biz ? 'הוא תמיד עסק' : 'הוא תמיד בית'}${same.length ? ` ולעדכן עוד ${same.length} תנועות` : ''}?`, 'כן, לזכור', () => {
+        rememberBiz(t.desc, t.biz); same.forEach(x => setBiz(x, t.biz)); save(); render();
+      });
+      break;
+    }
     case 'settings-tab': e.preventDefault(); ui.settingsTab = el.dataset.tab; if (el.dataset.tab === 'connections') Cloud.refreshSyncStatus(true); if (ui.route !== 'settings') location.hash = '#/settings'; else { render(); $(`[data-tab="${el.dataset.tab}"]`)?.focus(); } break;
     case 'add-tx': txDialog(); break;
     case 'edit-tx': txDialog(state.transactions.find(t => t.id === id)); break;
@@ -1020,6 +1093,12 @@ document.addEventListener('click', e => {
     case 'del-cat': state.categories = state.categories.filter(c => c.id !== id); state.transactions.forEach(t => { if (t.categoryId === id) t.categoryId = null; }); state.rules = state.rules.filter(r => r.categoryId !== id); save(); closeDialog(); render(); break;
     case 'group-all': state.categories.filter(c => c.group === el.dataset.group).forEach(c => c.enabled = el.dataset.on === '1'); save(); render(); $(`[data-action="group-all"][data-group="${el.dataset.group}"][data-on="${el.dataset.on}"]`)?.focus(); break;
     case 'del-rule': state.rules = state.rules.filter(r => r.id !== id); save(); render(); break;
+    case 'del-bizrule': state.bizRules = (state.bizRules || []).filter(r => r.id !== id); save(); render(); break;
+    case 'redetect-biz': {
+      let n = 0;
+      state.transactions.forEach(t => { const c = cat(t.categoryId); if (c && c.group === 'transfer') return; const v = detectBiz(t.desc); if (v !== !!t.biz) { t.biz = v; if (!c || isBizGroup(c.group) !== v) t.categoryId = categorize(t.desc, t.type, t.provider, v); n++; } });
+      save(); render(); toast(`עודכנו ${n} תנועות`); break;
+    }
     case 'recat-all': { let n = 0; state.transactions.forEach(t => { if (!t.categoryId) { const c = categorize(t.desc, t.type, t.provider); if (c) { t.categoryId = c; n++; } } }); save(); render(); toast(`סווגו ${n} תנועות`); break; }
     case 'export-json': {
       const blob = new Blob([JSON.stringify(state, null, 1)], { type: 'application/json' });
@@ -1070,7 +1149,11 @@ document.addEventListener('change', e => {
     case 'toggle-active': ui.onlyActive = el.checked; rerenderKeepFocus(el); break;
     case 'set-theme': state.settings.theme = el.value; save(); rerenderKeepFocus(el); break;
     case 'set-scale': state.settings.scale = +el.value; save(); rerenderKeepFocus(el); break;
-    case 'tx-type': { const s = $('#t-cat'); s.innerHTML = catOptions(el.value, ''); break; }
+    case 'tx-type': case 'tx-biz': {
+      const type = ($('input[name="type"]:checked') || {}).value || 'expense';
+      $('#t-cat').innerHTML = catOptions(type, '', $('#t-biz').checked); break;
+    }
+    case 'imp-biz': ui.imp.biz = el.checked; if (ui.imp.rows) { renderImport(); $('#i-biz')?.focus(); } break;
     case 'import-file': if (el.files[0]) readImportFile(el.files[0]); break;
     case 'import-json': {
       const f = el.files[0]; if (!f) return;
@@ -1136,9 +1219,9 @@ document.addEventListener('submit', e => {
     case 'members': state.members.forEach((m, i) => m.name = (fd['m' + i] || m.name).trim()); memberSalaryNames(); save(); render(); toast('השמות נשמרו'); break;
     case 'monthly-target': state.settings.monthlySavingsTarget = Math.max(0, +fd.mt || 0); save(); render(); toast('יעד החיסכון נשמר'); break;
     case 'tx': {
-      const data = { date: fd.date, type: fd.type, amount: Math.abs(+fd.amount), desc: fd.desc.trim(), categoryId: fd.categoryId || null, memberId: fd.memberId, note: fd.note.trim() };
+      const data = { date: fd.date, type: fd.type, amount: Math.abs(+fd.amount), desc: fd.desc.trim(), categoryId: fd.categoryId || null, memberId: fd.memberId, note: fd.note.trim(), biz: !!fd.biz };
       if (f.dataset.id) Object.assign(state.transactions.find(t => t.id === f.dataset.id), data);
-      else { const t = { id: uid(), provider: 'manual', ...data }; if (!t.categoryId) t.categoryId = categorize(t.desc, t.type, 'manual'); t.hash = txHash(t); state.transactions.push(t); }
+      else { const t = { id: uid(), provider: 'manual', ...data }; if (!t.categoryId) t.categoryId = categorize(t.desc, t.type, 'manual', t.biz);t.hash = txHash(t); state.transactions.push(t); }
       save(); closeDialog(); ui.ym = data.date.slice(0, 7); render(); toast('התנועה נשמרה'); break;
     }
     case 'goal': {
@@ -1152,6 +1235,7 @@ document.addEventListener('submit', e => {
       if (f.dataset.id) Object.assign(cat(f.dataset.id), data, { keywordsEdited: true }); else state.categories.push({ id: 'c_' + uid().slice(0, 8), enabled: true, budget: 0, custom: true, ...data });
       save(); closeDialog(); render(); break;
     }
+    case 'biz-keywords': state.settings.bizKeywords = fd.keywords.split(/[,،\n]/).map(s => s.trim()).filter(Boolean); save(); render(); toast('נשמר. אפשר ללחוץ ״זיהוי מחדש״ כדי להחיל על תנועות קיימות'); break;
     case 'add-rule': state.rules.push({ id: uid(), pattern: fd.pattern.trim(), categoryId: fd.categoryId }); save(); render(); toast('החוק נוסף'); break;
   }
 });
