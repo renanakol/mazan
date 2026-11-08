@@ -214,11 +214,16 @@ const Cloud = {
     await this.loadHousehold();
   },
   syncRows: [],
+  expected: [],
   async refreshSyncStatus(rerender = false) {
     if (!this.household) return;
-    const { data } = await this.sb.from('sync_status').select('*').eq('household_id', this.household.id);
+    const [{ data }, { data: exp }] = await Promise.all([
+      this.sb.from('sync_status').select('*').eq('household_id', this.household.id),
+      this.sb.from('expected_income').select('*').eq('household_id', this.household.id)
+    ]);
     this.syncRows = data || [];
-    if (rerender && ui.route === 'settings' && ui.settingsTab === 'connections') render();
+    this.expected = exp || [];
+    if (rerender || (exp || []).length) { const d = document.getElementById('dlg'); if (!(d && d.open)) render(); }
   },
   async createInvite() {
     const { data, error } = await this.sb.rpc('create_invite', { p_household: this.household.id });

@@ -72,4 +72,10 @@ assert.deepStrictEqual(fbz.map(t => t.categoryId), ['biz_software', null, 'subsc
 assert.strictEqual(toRow(fbz[0], 'h').is_business, true);
 assert.ok(prepareNew(bt, [], cfgB, cfg.members, true).every(t => t.biz), 'business account marks all');
 
+// חשבונית ירוקה: המרת מסמך פתוח להכנסה צפויה
+const { toExpected } = require('./greeninvoice');
+const ex = toExpected({ id: 'abc', number: 1042, type: 300, status: 0, documentDate: '2026-11-03', amount: 1170, currency: 'USD', currencyRate: 3.7, client: { name: 'לקוח בע"מ' }, income: [{ description: 'עיצוב אתר' }], url: { he: 'https://x' } }, 'h');
+assert.deepStrictEqual([ex.external_id, ex.number, ex.client, ex.amount_ils, ex.doc_date, ex.due_date], ['abc', '1042', 'לקוח בע"מ', 4329, '2026-11-03', null]);
+assert.ok(ex.description.startsWith('חשבון עסקה · עיצוב אתר'));
+
 console.log('כל הבדיקות עברו ✔');

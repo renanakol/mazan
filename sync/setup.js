@@ -5,6 +5,7 @@ const readline = require('readline');
 const store = require('./secure-store');
 const { PROVIDERS } = require('./convert');
 const { connect } = require('./common');
+const { getToken } = require('./greeninvoice');
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
 let muted = false;
@@ -38,8 +39,19 @@ async function main() {
     console.log('\nחשבונות מוגדרים:');
     if (!data.accounts.length) console.log('  (אין עדיין)');
     data.accounts.forEach((a, i) => console.log(`  ${i + 1}. ${PROVIDERS[a.provider].name} – ${(members.find(m => m.id === a.member) || {}).name || a.member}${a.business ? ' (עסק)' : ''}`));
-    console.log('\nמה לעשות?  [1] הוספת חשבון   [2] מחיקת חשבון   [3] שמירה ויציאה   [4] יציאה בלי לשמור');
+    console.log(`חשבונית ירוקה: ${data.greenInvoice ? 'מחובר' : 'לא מחובר'}`);
+    console.log('\nמה לעשות?  [1] הוספת חשבון   [2] מחיקת חשבון   [3] שמירה ויציאה   [4] יציאה בלי לשמור   [5] חיבור לחשבונית ירוקה');
     const c = await ask('בחירה: ');
+    if (c === '5') {
+      console.log('יוצרים מפתח API בחשבונית ירוקה: הגדרות ← כלים למפתחים ← מפתחות API (https://app.greeninvoice.co.il/settings/developers/api).');
+      console.log('המפתח משמש רק לקריאת מסמכים פתוחים (הכנסות צפויות). אפשר לבטל אותו שם בכל רגע.');
+      const id = await askHidden('  מזהה המפתח (API Key ID): ');
+      const secret = await askHidden('  הסוד (API Secret): ');
+      if (!id || !secret) { console.log('לא הוזן מפתח.'); continue; }
+      try { await getToken({ id, secret }); data.greenInvoice = { id, secret }; console.log('מחובר לחשבונית ירוקה! זכרו לשמור (3).'); }
+      catch (e) { console.log(e.message); if (/^(כ|כן|y|yes)$/i.test(await ask('לשמור בכל זאת? (כ/ל): '))) data.greenInvoice = { id, secret }; }
+      continue;
+    }
     if (c === '1') {
       const keys = Object.keys(PROVIDERS);
       keys.forEach((k, i) => console.log(`  [${i + 1}] ${PROVIDERS[k].name}`));

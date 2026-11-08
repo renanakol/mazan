@@ -166,6 +166,14 @@ function yearMatrix(year) {
 }
 const totalBudget = kind => state.categories.filter(c => c.enabled && kindOfCat(c) === kind && !isBizGroup(c.group)).reduce((s, c) => s + (+c.budget || 0), 0);
 
+/* הכנסות עסק צפויות (מסמכים פתוחים מחשבונית ירוקה) לחודש מסוים; בחודש הנוכחי כוללים גם מסמכים באיחור */
+function expectedFor(ym) {
+  const cur = currentYm();
+  return (Cloud.expected || []).map(e => ({ ...e, when: String(e.due_date || e.doc_date || '').slice(0, 10) }))
+    .filter(e => e.when && (e.when.startsWith(ym) || (ym === cur && e.when < cur)))
+    .sort((a, b) => a.when.localeCompare(b.when));
+}
+
 /* ================= ניווט ================= */
 const ROUTES = [
   { id: 'month', label: 'חודשי', icon: 'month', title: 'סיכום חודשי' },
@@ -219,6 +227,9 @@ function monthSwitcher() {
 /* ---------- מסך חודשי ---------- */
 function viewMonth() {
   const s = monthStats(ui.ym);
+  const exp = expectedFor(ui.ym).map(e => ({ ...e, url: /^https:\/\//.test(e.url || '') ? e.url : null }));
+  const expTotal = exp.reduce((a, e) => a + (+e.amount_ils || 0), 0);
+  const expLate = exp.filter(e => e.when < currentYm()).length;
   const budgetExp = totalBudget('expense');
   const target = +state.settings.monthlySavingsTarget || 0;
   const hasTx = s.txs.length > 0;
@@ -240,13 +251,17 @@ function viewMonth() {
     <div class="card kpi"><div class="k-label">יעד חיסכון חודשי</div>${target ? `<div class="k-value num ${s.balance >= target ? 'pos' : ''}">${Math.max(0, Math.round(s.balance / target * 100))}%</div><div class="k-sub">יעד: ${fmt(target)} לחודש</div>` : `<div class="k-value">—</div><div class="k-sub"><a href="#/goals">להגדרת יעד</a></div>`}</div>
   </section>
 
-  ${s.biz.count ? `<section class="card biz-card" aria-labelledby="h-biz" style="margin-bottom:16px">
+  ${s.biz.count || exp.length ? `<section class="card biz-card" aria-labelledby="h-biz" style="margin-bottom:16px">
     <div class="card-head"><h2 id="h-biz"><span class="dot" style="background:var(--c-biz)"></span> העסק החודש</h2><a class="btn sm" href="#/tx" data-action="filter-biz">לתנועות העסק</a></div>
     <div class="grid kpis" style="margin:0">
-      <div><div class="k-label muted small">הכנסות העסק</div><div class="num" style="font-size:1.3rem;font-weight:700">${fmt(s.biz.income)}</div></div>
+      <div><div class="k-label muted small">הכנסות העסק</div><div class="num" style="font-size:1.3rem;font-weight:700">${fmt(s.biz.income)}</div>${expTotal ? `<div class="small muted">ועוד <span class="num">${fmt(expTotal)}</span> צפויות</div>` : ''}</div>
       <div><div class="k-label muted small">הוצאות העסק</div><div class="num" style="font-size:1.3rem;font-weight:700">${fmt(s.biz.expense)}</div></div>
       <div><div class="k-label muted small">רווח</div><div class="num ${s.biz.income - s.biz.expense >= 0 ? 'pos' : 'neg'}" style="font-size:1.3rem;font-weight:700">${fmt(s.biz.income - s.biz.expense)}</div></div>
     </div>
+    ${exp.length ? `<details style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+      <summary style="cursor:pointer"><strong>הכנסות צפויות מחשבונית ירוקה: <span class="num">${fmt(expTotal)}</span></strong> <span class="muted small">(${exp.length} מסמכים פתוחים${expLate ? `, ${expLate} באיחור` : ''})</span></summary>
+      <ul class="rule-list" style="margin-top:8px">${exp.map(e => `<li><div class="grow"><div class="tx-desc">${esc(e.client || 'לקוח')} · מס׳ ${esc(e.number)}</div><div class="tx-meta">${esc(e.description)} · ${e.when < currentYm() ? '<span class="neg">באיחור, מ־' + dateLabel(e.when) + '</span>' : dateLabel(e.when)}</div></div><span class="num" style="font-weight:600">${fmt(e.amount_ils)}</span>${e.url ? `<a class="btn sm" href="${esc(e.url)}" target="_blank" rel="noopener">מסמך<span class="sr-only"> ${esc(e.number)} (נפתח בחלון חדש)</span></a>` : ''}</li>`).join('')}</ul>
+    </details>` : ''}
     <p class="small muted" style="margin-top:8px">תנועות העסק לא נכללות בהכנסות, בהוצאות ובתקציב של הבית שלמעלה.</p>
   </section>` : ''}
   <div class="grid two">
@@ -578,6 +593,16 @@ function settingsConnections() {
       <div class="btn-row" style="margin-top:4px"><button class="btn sm" data-action="open-import" data-provider="${p.id}">${icon('upload')}ייבוא קובץ</button></div>
     </li>`).join('')}</ul>
   </section>
+  ${(() => {
+    const gi = (Cloud.syncRows || []).find(r => r.provider === 'greeninvoice');
+    const n = (Cloud.expected || []).length, tot = (Cloud.expected || []).reduce((a, e) => a + (+e.amount_ils || 0), 0);
+    return `<section class="card">
+    <div class="card-head"><h2><span class="dot" style="background:var(--c-biz)"></span> חשבונית ירוקה</h2>${gi ? `<span class="pill ${gi.ok ? 'ok' : ''}">${gi.ok ? 'מחובר' : 'שגיאה'}</span>` : '<span class="pill">לא מחובר</span>'}</div>
+    <p class="small" style="margin-bottom:8px">מסמכים פתוחים שעוד לא שולמו (חשבונות עסקה וחשבוניות מס) מוצגים כ<strong>הכנסות עסק צפויות</strong> במסך החודשי, לפי תאריך המסמך. כשמסמך נסגר כשולם בחשבונית ירוקה, הוא יורד מהרשימה.</p>
+    ${gi ? `<p class="small">${gi.ok ? `${n} מסמכים פתוחים, <span class="num">${fmt(tot)}</span> צפויים` : `<span class="neg">${esc(gi.message)}</span>`} · עודכן ${esc(new Date(gi.last_run).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }))}</p>`
+      : '<p class="small muted">כדי לחבר: בתוכנת הסנכרון במחשב הביתי (node setup.js) בוחרים <strong>[5] חיבור לחשבונית ירוקה</strong> ומזינים מפתח API.</p>'}
+  </section>`;
+  })()}
   <section class="card">
     <h2 style="margin-bottom:10px">איך מורידים קובץ?</h2>
     <ol class="steps small">

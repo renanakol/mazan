@@ -9,6 +9,7 @@ const { createScraper } = require('israeli-bank-scrapers');
 const store = require('./secure-store');
 const { PROVIDERS, convertScrape, prepareNew, toRow } = require('./convert');
 const { browserPath, log, connect } = require('./common');
+const { syncGreenInvoice } = require('./greeninvoice');
 
 const STATE_FILE = path.join(__dirname, 'state.json');
 const args = process.argv.slice(2);
@@ -47,15 +48,15 @@ async function status(ctx, provider, member, ok, message, added = 0) {
 
 async function main() {
   const secrets = store.load();
-  if (!secrets || !secrets.app || !(secrets.accounts || []).length) { log('אין הגדרות. הריצו קודם: node setup.js'); process.exitCode = 1; return; }
+  if (!secrets || !secrets.app || (!(secrets.accounts || []).length && !secrets.greenInvoice)) { log('אין הגדרות. הריצו קודם: node setup.js'); process.exitCode = 1; return; }
   const exe = browserPath();
-  if (!exe) { log('לא נמצא Chrome או Edge במחשב.'); process.exitCode = 1; return; }
+  if (!exe && (secrets.accounts || []).length) { log('לא נמצא Chrome או Edge במחשב.'); process.exitCode = 1; return; }
   const ctx = await connect(secrets.app);
   const members = ctx.config.members || [];
   const state = readState();
   let failures = 0;
 
-  for (const acc of secrets.accounts) {
+  for (const acc of secrets.accounts || []) {
     const key = `${acc.provider}:${acc.member}`;
     if (ONLY && ONLY !== key) continue;
     const p = PROVIDERS[acc.provider];
@@ -91,6 +92,19 @@ async function main() {
     } catch (e) {
       log(`${label}: שגיאה – ${e.message}`);
       try { await status(ctx, acc.provider, acc.member, false, 'שגיאה: ' + e.message.slice(0, 200)); } catch (_) {}
+      failures++;
+    }
+  }
+  if (secrets.greenInvoice && (!ONLY || ONLY === 'greeninvoice')) {
+    log('חשבונית ירוקה: קורא מסמכים פתוחים…');
+    try {
+      const r = await syncGreenInvoice(ctx, secrets.greenInvoice);
+      const msg = `${r.open} מסמכים פתוחים, ${Math.round(r.total).toLocaleString('he-IL')} ₪ צפויים${r.closed ? `, ${r.closed} נסגרו` : ''}`;
+      log('חשבונית ירוקה: ' + msg);
+      await status(ctx, 'greeninvoice', 'biz', true, msg, r.open);
+    } catch (e) {
+      log('חשבונית ירוקה: שגיאה – ' + e.message);
+      try { await status(ctx, 'greeninvoice', 'biz', false, e.message.slice(0, 200)); } catch (_) {}
       failures++;
     }
   }
